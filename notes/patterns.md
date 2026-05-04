@@ -11,3 +11,4 @@
 - response.content is a list of typed blocks — filter by .type (tool_use, text, etc.)
 - Pydantic schema → tool input_schema via model_json_schema()
 - Validate tool inputs by reconstructing the Pydantic model from tool_use.input
+- Long string literals: wrap with parens and adjacent literals; Python concatenates at parse time

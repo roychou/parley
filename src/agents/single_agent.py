@@ -1,4 +1,5 @@
 """First agent: single Anthropic SDK call with one Pydantic-typed tool."""
+
 import json
 from pathlib import Path
 
