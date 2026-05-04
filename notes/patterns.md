@@ -1,0 +1,13 @@
+- yfinance.Ticker(symbol).history(period="1mo") returns DataFrame
+- DataFrame iteration: for date, row in df.iterrows()
+- pathlib pattern: Path(...).mkdir(parents=True, exist_ok=True)
+- yfinance period="1mo" is calendar-month-back, not a fixed start date
+- Market holidays produce gaps; don't assume continuous business days
+- For backtests later: pandas-market-calendars for proper trading-day awareness
+- Always verify model strings — Anthropic ships fast and memory goes stale
+- Default Sonnet ID as of today: claude-sonnet-4-6
+- Budget heuristic: Sonnet for everything until burn rate forces a split
+- Tool use loop pattern: check stop_reason == "tool_use", append assistant content, build tool_result blocks, send back, loop until end_turn
+- response.content is a list of typed blocks — filter by .type (tool_use, text, etc.)
+- Pydantic schema → tool input_schema via model_json_schema()
+- Validate tool inputs by reconstructing the Pydantic model from tool_use.input
