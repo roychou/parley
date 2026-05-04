@@ -1,4 +1,5 @@
 """Fetch end-of-day OHLCV data from yfinance and log to JSON."""
+
 import json
 from datetime import datetime
 from pathlib import Path
