@@ -8,7 +8,7 @@ from pathlib import Path
 import yfinance as yf
 
 
-def fetch_history(ticker: str, period: str = "1mo") -> dict:
+def fetch_history(ticker: str, period: str = "1y") -> dict:
     """Fetch OHLCV history for a ticker. Returns a dict keyed by date string."""
     t = yf.Ticker(ticker)
     df = t.history(period=period)
@@ -30,7 +30,9 @@ def get_tickers_from_file(filepath):
         content = f.read()
     
     # This regex finds anything inside square brackets [] at the start of a list item
-    tickers = re.findall(r'- \[(.*?)\]', content)
+    
+    tickers = re.findall(r'^- \[([A-Z]{1,5})\]', content, flags=re.MULTILINE)
+    # tickers = re.findall(r'- \[(.*?)\]', content)
     return tickers
 
 # Example usage:
@@ -41,18 +43,28 @@ def get_tickers_from_file(filepath):
 def main() -> None:
     tickers_file = Path("notes/universe.md")
     ticker_universe = get_tickers_from_file(tickers_file)
-    # ticker = "SPY"
+    out_dir = Path("data/cache")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    succeeded, failed = [], []
     for ticker in ticker_universe:
-        data = fetch_history(ticker, period="1mo")
-        out_dir = Path("data/cache")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            data = fetch_history(ticker, period="1y")
+        except Exception as e:
+            print(f"FAILED {ticker}: {e}")
+            failed.append(ticker)
+            continue
+
         out_path = out_dir / f"{ticker}_{datetime.now().strftime('%Y%m%d')}.json"
         with out_path.open("w") as f:
             json.dump(data, f, indent=2)
-        print(f"Wrote {len(data)} days of {ticker} data to {out_path}")
         last_date = max(data.keys())
-        print(f"Latest close: {data[last_date]['close']} on {last_date}")
+        print(f"{ticker}: {len(data)} days, last close {data[last_date]['close']} on {last_date}")
+        succeeded.append(ticker)
 
+    print(f"\nDone. {len(succeeded)} succeeded, {len(failed)} failed.")
+    if failed:
+        print(f"Failed: {failed}")
 
 if __name__ == "__main__":
     main()
