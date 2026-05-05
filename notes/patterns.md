@@ -1,3 +1,4 @@
+4 May 2026
 - yfinance.Ticker(symbol).history(period="1mo") returns DataFrame
 - DataFrame iteration: for date, row in df.iterrows()
 - pathlib pattern: Path(...).mkdir(parents=True, exist_ok=True)
@@ -12,3 +13,16 @@
 - Pydantic schema → tool input_schema via model_json_schema()
 - Validate tool inputs by reconstructing the Pydantic model from tool_use.input
 - Long string literals: wrap with parens and adjacent literals; Python concatenates at parse time
+5 May 2026
+- pandas Series rolling operations — series.rolling(window=N).mean() for SMA, series.ewm(alpha=1/N, min_periods=N, adjust=False).mean() for Wilder smoothing.
+- NaN handling on rolling windows — series.dropna().iloc[-1] is the idiom for "latest non-NaN value." min_periods=window in ewm enforces NaN until full window.
+- pytest float assertions — pytest.approx(value) not ==. Series-vs-scalar comparison ambiguity ("truth value is ambiguous" error).
+- Pydantic to JSON schema for tools — MyModel.model_json_schema() is the bridge.
+- Anthropic SDK tool-use loop shape — while response.stop_reason == "tool_use", append assistant content, build tool_result blocks with matching tool_use_id, append as user role, re-call.
+- Parallel tool calls — one assistant turn can contain multiple tool_use blocks; iterate over [b for b in response.content if b.type == "tool_use"].
+- JSON serialization gotcha — numpy floats from yfinance choke json.dumps; cast with float(...) at the boundary.
+- Empty DataFrame handling in yfinance — df.empty check. Wrap loops in try/except because failure modes are diverse (HTTP, parse, ValueError).
+- Cache contract — schema lives in the JSON file format, not in the function signature. Lowercase vs capitalized keys was today's gotcha.
+- Tool descriptions as prompts — vague description produces default-y model behavior. The 1mo default got picked because nothing in the description said when to choose otherwise.
+- Silent contract mismatch — Pydantic-validated args that the function ignores. The period argument in get_price_history.
+- Hallucination on missing date anchors — without as_of envelope on tool results and current-date in system prompt, the model invents date ranges that don't exist.
