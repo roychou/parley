@@ -1,4 +1,4 @@
-4 May 2026
+## 4 May 2026
 - yfinance.Ticker(symbol).history(period="1mo") returns DataFrame
 - DataFrame iteration: for date, row in df.iterrows()
 - pathlib pattern: Path(...).mkdir(parents=True, exist_ok=True)
@@ -13,7 +13,7 @@
 - Pydantic schema → tool input_schema via model_json_schema()
 - Validate tool inputs by reconstructing the Pydantic model from tool_use.input
 - Long string literals: wrap with parens and adjacent literals; Python concatenates at parse time
-5 May 2026
+## 5 May 2026
 - pandas Series rolling operations — series.rolling(window=N).mean() for SMA, series.ewm(alpha=1/N, min_periods=N, adjust=False).mean() for Wilder smoothing.
 - NaN handling on rolling windows — series.dropna().iloc[-1] is the idiom for "latest non-NaN value." min_periods=window in ewm enforces NaN until full window.
 - pytest float assertions — pytest.approx(value) not ==. Series-vs-scalar comparison ambiguity ("truth value is ambiguous" error).
@@ -26,3 +26,13 @@
 - Tool descriptions as prompts — vague description produces default-y model behavior. The 1mo default got picked because nothing in the description said when to choose otherwise.
 - Silent contract mismatch — Pydantic-validated args that the function ignores. The period argument in get_price_history.
 - Hallucination on missing date anchors — without as_of envelope on tool results and current-date in system prompt, the model invents date ranges that don't exist.
+## 7 May 2026
+- Pydantic field descriptions on output schemas function as model instructions during structured output generation. When two fields need to agree (e.g., `as_of` matching the tool result's date), the cross-reference belongs in the description text, not just inferred from field names.
+- System prompts for agents read better and steer better when split into sections (role, workflow, indicator rules, constraints) rather than written as continuous prose. Run-on prompts blur structure the model would otherwise latch onto.
+- When a specialist combines multiple signals into one output, specify the conflict-resolution rule explicitly (e.g., "weight trend over momentum when conflicting"). Without it the model picks arbitrarily and the same inputs can produce different outputs across runs.
+- FastMCP only populates `result.structuredContent` when the tool's return type is annotated with a Pydantic model (or other schema-bearing type). Without that, structured data lives in `result.content[0].text` as a JSON string and must be parsed. Fix later by typing the server tool's return.
+- MCP server scripts launched directly by `mcp dev` or `python` don't inherit the project root on `sys.path`. Either install the package in editable mode (`uv pip install -e .`) or add a sys.path shim at the top of each entry-point script. Pick one approach project-wide later.
+- Tool input schemas in the Anthropic SDK are JSON Schema dicts. Pydantic's `.model_json_schema()` generates these automatically; for tools with one or two trivial inputs, hand-writing the dict is shorter. Reserve Pydantic for tools whose inputs warrant validation or shared use elsewhere.
+- `submit_analysis` is the model's exit signal for structured-output specialists, not a dispatch target. Handle it inline in the agent loop with an early return; only true data-fetching tools route through `dispatch_tool`.
+- `GetTechnicalsInput` is duplicated across `single_agent.py` and `technicals_specialist.py`. Consolidate into shared schemas module once the agents directory stabilizes (post-supervisor). Don't refactor mid-build.
+- Eval gap surfaced: the technicals tool exposes SMA-20 and RSI-14 values but no current price, so the prompt rule "price above SMA-20 = bullish" can't be cleanly evaluated. The model correctly hedged ("consistent with"). Either add current price to the tool result or rewrite the trend rule in indicator-only terms (e.g., compare SMA-20 to SMA-50). Day 16+ decision.
