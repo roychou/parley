@@ -5,8 +5,24 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import yfinance as yf
 
+def load_cached_prices(ticker: str) -> pd.DataFrame:
+    """Load most recent cached OHLCV for a ticker as a DataFrame indexed by date."""
+    cache_dir = Path("data/cache")
+    matches = sorted(cache_dir.glob(f"{ticker}_*.json"))
+    if not matches:
+        raise FileNotFoundError(f"No cached data for {ticker} in {cache_dir}")
+    latest = matches[-1]  # most recent fetch by filename sort
+
+    with latest.open() as f:
+        records = json.load(f)
+
+    df = pd.DataFrame.from_dict(records, orient="index")
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    return df
 
 def fetch_history(ticker: str, period: str = "1y") -> dict:
     """Fetch OHLCV history for a ticker. Returns a dict keyed by date string."""
