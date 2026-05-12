@@ -5,18 +5,19 @@ import traceback
 from dataclasses import asdict
 
 from mcp.server.fastmcp import FastMCP
-from src.data.technicals import process_ticker
+from src.data.fundamentals import process_ticker
 
 # Set up logging so we can actually see the Python stack traces in our terminal
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] Server: %(message)s")
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("mcp-technicals")
+mcp = FastMCP("mcp-fundamentals")
 
 
 @mcp.tool()
-def get_technicals(ticker: str) -> dict:
-    """Get technical indicators and date envelope for a given ticker."""
+def get_fundamentals(ticker: str) -> dict:
+    """Get fundamental metrics and valuation snapshot for a given ticker."""
+
     try:
         # 1. Attempt the pure data pipeline
         snapshot = process_ticker(ticker)
@@ -31,7 +32,7 @@ def get_technicals(ticker: str) -> dict:
         return {
             "error": "DataFetchFailure",
             "message": str(e),
-            "details": "The technicals server encountered a Python exception during processing.",
+            "details": "The fundamentals server encountered a Python exception during processing.",
         }
 
 
