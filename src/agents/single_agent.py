@@ -31,12 +31,6 @@ class GetPriceHistoryInput(BaseModel):
     )
 
 
-class GetTechnicalsInput(BaseModel):
-    """Input schema for the get_technicals tool."""
-
-    ticker: str = Field(description="The stock ticker symbol, e.g. 'SPY' or 'AAPL'")
-
-
 def get_price_history(ticker: str, period: str = "1mo") -> dict:
     """Load cached price history from disk. Returns OHLCV dict keyed by date."""
     cache_dir = Path("data/cache")
@@ -73,6 +67,7 @@ def get_technicals(ticker: str) -> dict:
         "rsi_14": float(rsi_14.iloc[-1]) if len(rsi_14) else None,
         "n_days": len(closes),
     }
+
 
 TOOLS = [
     {

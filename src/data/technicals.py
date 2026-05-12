@@ -1,34 +1,83 @@
 import pandas as pd
+from typing import Dict, List, Union
+from dataclasses import dataclass
 
-def sma(prices: list[float] | pd.Series, window: int) -> pd.Series:
+# IMPORT FIX: Grab the process_ticker function and alias it so it doesn't clash
+from src.data.fetch_prices import get_prices
+
+# ==========================================
+# 1. INDICATOR MATH
+# ==========================================
+
+
+def sma(prices: Union[List[float], pd.Series], window: int) -> pd.Series:
+    """Calculates the Simple Moving Average (SMA)."""
     if isinstance(prices, list):
         prices = pd.Series(prices, dtype=float)
     return prices.rolling(window=window).mean()
 
-"""
-The relative strength index (RSI) is a momentum indicator used in technical analysis. RSI measures the speed and magnitude of a security's recent price changes to detect overbought or oversold conditions in the price of that security. The RSI is displayed as an oscillator (a line graph) on a scale of 0 to 100.
-"""
-def rsi(prices: list[float] | pd.Series, window: int = 14) -> pd.Series:
-    """
-    Calculates the RSI for a given price series.
-    """
-    # 1. Get the difference in price from the previous day
-    delta = prices.diff()
 
-    # 2. Separate gains (positive) and losses (negative)
+def rsi(prices: Union[List[float], pd.Series], window: int = 14) -> pd.Series:
+    """
+    Calculates the Relative Strength Index (RSI).
+
+    RSI is a momentum indicator used in technical analysis. It measures the
+    speed and magnitude of a security's recent price changes to detect
+    overbought or oversold conditions. Displayed on a scale of 0 to 100.
+    """
+    if isinstance(prices, list):
+        prices = pd.Series(prices, dtype=float)
+
+    delta = prices.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
-    # 3. Calculate the exponential moving average of gains and losses
-    # Wilder's smoothing uses alpha = 1 / window
-    """
-    This line will return NaN (Not a Number) for the first n-1 days of your data. It forces the script to wait until it has a full "window" of data before showing a result.
-    """
-    avg_gain = gain.ewm(alpha=1/window, min_periods=window, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/window, min_periods=window, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1 / window, min_periods=window, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / window, min_periods=window, adjust=False).mean()
 
-    # 4. Calculate RS and RSI
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    
-    return rsi
+    return 100 - (100 / (1 + rs))
+
+
+# ==========================================
+# 2. DATA PROCESSING & EXPORT
+# ==========================================
+
+
+@dataclass
+class TechnicalsSnapshot:
+    """Immutable data record containing the latest technical indicators."""
+
+    as_of: str
+    date_range: Dict[str, str]
+    sma_20: float
+    rsi_14: float
+
+
+def process_ticker(ticker: str) -> TechnicalsSnapshot:
+    """
+    Retrieves price data (handling cache/fetch internally),
+    calculates indicators, and returns a typed snapshot.
+    """
+    # 1. Request data (fetch_prices.py handles the cache vs fetch logic)
+    raw_data = get_prices(ticker)
+
+    # 2. Transform into a Pandas DataFrame
+    df = pd.DataFrame.from_dict(raw_data, orient="index")
+    df.sort_index(inplace=True)
+
+    closes = df["close"]
+
+    # 3. Calculate indicators
+    sma_20_val = sma(closes, window=20).iloc[-1]
+    rsi_14_val = rsi(closes, window=14).iloc[-1]
+
+    return TechnicalsSnapshot(
+        as_of=str(df.index[-1]),
+        date_range={
+            "start": str(df.index[0]),
+            "end": str(df.index[-1]),
+        },
+        sma_20=float(sma_20_val),
+        rsi_14=float(rsi_14_val),
+    )
