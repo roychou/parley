@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from anthropic.types import Message
 from dotenv import load_dotenv
 
@@ -36,12 +36,7 @@ MODEL = "claude-sonnet-4-6"  # Updated to standard naming, adjust if using custo
 MAX_AGENT_TURNS = 10
 
 # ==========================================
-# 1. IMMUTABLE DATA MODELS
-# ==========================================
-
-
-# ==========================================
-# 2. PROMPTS & TOOL CONFIGURATION
+# 1. PROMPTS & TOOL CONFIGURATION
 # ==========================================
 
 FUNDAMENTALS_ROLE_PROMPT = """
@@ -90,7 +85,7 @@ AGENT_TOOLS = [
 ]
 
 # ==========================================
-# 3. I/O FUNCTIONS (Side-Effects)
+# 2. I/O FUNCTIONS (Side-Effects)
 # ==========================================
 
 
@@ -126,12 +121,12 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> dict:
 
 
 # ==========================================
-# 4. ORCHESTRATOR (Agent Loop)
+# 3. ORCHESTRATOR (Agent Loop)
 # ==========================================
 
 
 async def run_fundamentals_specialist(
-    ticker: str, client: Anthropic, as_of: str | None = None
+    ticker: str, client: AsyncAnthropic, as_of: str | None = None
 ) -> FundamentalsAnalysis:
     """Executes the ReAct/Tool-calling loop until the LLM submits an analysis."""
     if as_of is None:
@@ -151,13 +146,15 @@ async def run_fundamentals_specialist(
         logger.debug(f"Agent Turn {turn + 1}/{MAX_AGENT_TURNS}")
 
         # 1. Get LLM response
-        response: Message = client.messages.create(
+        response: Message = await client.messages.create(
             model=MODEL,
             max_tokens=1024,
             system=system_prompt,
             messages=messages,
             tools=AGENT_TOOLS,
         )
+
+        logger.info(f"api_usage call_site=fundamentals_specialist input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens} model={MODEL}")
 
         # 2. Add assistant's response to history
         messages.append({"role": "assistant", "content": response.content})
@@ -216,7 +213,7 @@ async def run_fundamentals_specialist(
 def main() -> None:
     # Instantiate the client at the top level
     try:
-        client = Anthropic()
+        client = AsyncAnthropic()
     except Exception as e:
         logger.error(f"Failed to initialize Anthropic client: {e}")
         sys.exit(1)

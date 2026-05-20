@@ -61,3 +61,7 @@ Current `fundamentals.py` calls `yf.Ticker(ticker)` 4+ times to compute the metr
 
 ### Fetch-with-cache pattern is the right caller interface
 Callers should hit a single `fetch(ticker, force_refresh=False)` that returns from cache if fresh, otherwise hits yfinance and writes the cache. Filings staleness threshold of "same-day cache is fresh" is appropriate — quarterly filings don't change within a day. Distinct from price cache freshness semantics. Refactor scheduled for Day 20.
+
+## 13 May
+## Day 22
+- Edge cases (subtle mischaracterizations, partial groundings, claims that are technically true but misleading) are still untested

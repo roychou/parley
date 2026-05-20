@@ -10,4 +10,5 @@ class FundamentalsAnalysis(SpecialistSignal):
     # Typed evidence fields replacing the generic dict
     pe_ratio: float | None = None
     profit_margin: float | None = None
+    rev_growth_yoy: float
     debt_to_equity: float | None = None

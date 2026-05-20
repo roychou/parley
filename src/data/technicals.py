@@ -50,6 +50,7 @@ class TechnicalsSnapshot:
 
     as_of: str
     date_range: Dict[str, str]
+    current_price: float
     sma_20: float
     rsi_14: float
 
@@ -71,6 +72,7 @@ def process_ticker(ticker: str) -> TechnicalsSnapshot:
     # 3. Calculate indicators
     sma_20_val = sma(closes, window=20).iloc[-1]
     rsi_14_val = rsi(closes, window=14).iloc[-1]
+    current_price_val = closes.iloc[-1]
 
     return TechnicalsSnapshot(
         as_of=str(df.index[-1]),
@@ -78,6 +80,7 @@ def process_ticker(ticker: str) -> TechnicalsSnapshot:
             "start": str(df.index[0]),
             "end": str(df.index[-1]),
         },
+        current_price=float(current_price_val),
         sma_20=float(sma_20_val),
         rsi_14=float(rsi_14_val),
     )
