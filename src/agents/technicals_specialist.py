@@ -6,7 +6,7 @@ import logging
 import sys
 from typing import Any, Dict, List
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from anthropic.types import Message
 from dotenv import load_dotenv
 
@@ -57,6 +57,8 @@ Constraints:
 - The supporting_indicators dict MUST contain the actual values returned by the tool, keyed by indicator name.
 - Reasoning should reference specific indicator values from the tool.
 - Make sure to include the ticker symbol in your final output.
+- STRICT DATA ADHERENCE: If `sma_20` or `rsi_14` are returned as `null` by the tool, DO NOT invent, calculate, or estimate them. 
+- MISSING DATA PROTOCOL: If indicators are null, your reasoning MUST state "Missing technical data." You must return a NEUTRAL signal with a confidence of 0.0.
 """
 
 AGENT_TOOLS = [
@@ -121,7 +123,7 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> dict:
 
 
 async def run_technicals_specialist(
-    ticker: str, client: Anthropic, as_of: str | None = None
+    ticker: str, client: AsyncAnthropic, as_of: str | None = None
 ) -> TechnicalsAnalysis:
     """Executes the ReAct/Tool-calling loop until the LLM submits an analysis."""
     if as_of is None:
@@ -141,13 +143,15 @@ async def run_technicals_specialist(
         logger.debug(f"Agent Turn {turn + 1}/{MAX_AGENT_TURNS}")
 
         # 1. Get LLM response
-        response: Message = client.messages.create(
+        response: Message = await client.messages.create(
             model=MODEL,
             max_tokens=1024,
             system=system_prompt,
             messages=messages,
             tools=AGENT_TOOLS,
         )
+        
+        logger.info(f"api_usage call_site=technicals_specialist input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens} model={MODEL}")
 
         # 2. Add assistant's response to history
         messages.append({"role": "assistant", "content": response.content})
@@ -206,7 +210,7 @@ async def run_technicals_specialist(
 def main() -> None:
     # Instantiate the client at the top level
     try:
-        client = Anthropic()
+        client = AsyncAnthropic()
     except Exception as e:
         logger.error(f"Failed to initialize Anthropic client: {e}")
         sys.exit(1)
