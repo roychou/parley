@@ -51,6 +51,24 @@ def calc_pe(price: float, eps: float) -> float:
     return float(price / eps)
 
 
+def pe_band(pe: float | None) -> str:
+    """Coarse P/E band matching the fundamentals prompt's thresholds
+    ("P/E above 40 is high, below 15 is low").
+
+    Used to key the fundamentals signal cache: the specialist reasons about P/E
+    only via these thresholds, so within a band its signal is stable and the
+    cached analysis can be reused until P/E crosses a boundary (or a new filing
+    lands). This is what lets fundamentals refresh ~quarterly instead of daily.
+    """
+    if _is_nan(pe) or pe is None or pe <= 0:
+        return "na"
+    if pe < 15:
+        return "low"
+    if pe <= 40:
+        return "fair"
+    return "high"
+
+
 def calc_margin(net_income: float, revenue: float) -> float:
     if _is_nan(revenue) or revenue == 0:
         return float("nan")
@@ -211,11 +229,15 @@ def get_filings_history(ticker: str) -> list[dict]:
     return filings
 
 
-def get_fundamentals_as_of(ticker: str, as_of_date: str) -> Optional[ValuationSnapshot]:
+def get_fundamentals_as_of(
+    ticker: str, as_of_date: str, price_period: str = "5y"
+) -> Optional[ValuationSnapshot]:
     """Returns the most recent filing available as of `as_of_date`, with P/E computed
     using the close price on (or most recently before) `as_of_date`.
 
     Returns None if no filing has report_date <= as_of_date, or if no price is available.
+    price_period defaults to "5y" because backtest as-of dates can sit well before
+    today; a 1y price window would return None for older decision dates.
     """
     filings = get_filings_history(ticker)
     eligible = [f for f in filings if f["report_date"] and f["report_date"] <= as_of_date]
@@ -224,7 +246,7 @@ def get_fundamentals_as_of(ticker: str, as_of_date: str) -> Optional[ValuationSn
     latest = eligible[0]  # filings are most-recent first
 
     # Get the close price at as_of_date (or the most recent available before it)
-    prices = _get_prices_dict(ticker)
+    prices = _get_prices_dict(ticker, price_period)
     eligible_price_dates = sorted(d for d in prices if d <= as_of_date)
     if not eligible_price_dates:
         return None
@@ -243,10 +265,10 @@ def get_fundamentals_as_of(ticker: str, as_of_date: str) -> Optional[ValuationSn
     )
 
 
-def _get_prices_dict(ticker: str) -> dict:
+def _get_prices_dict(ticker: str, period: str = "5y") -> dict:
     """Import-late helper to avoid circular import with fetch_prices."""
     from src.data.fetch_prices import get_prices
-    return get_prices(ticker)
+    return get_prices(ticker, period)
 
 
 def save_snapshot_to_cache(ticker: str, snapshot: ValuationSnapshot) -> None:

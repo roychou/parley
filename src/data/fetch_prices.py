@@ -96,22 +96,27 @@ def fetch_raw_history(ticker: str, period: str = "1y") -> List[dict]:
     return records
 
 
-def save_prices_to_cache(ticker: str, data: Dict[str, dict]) -> None:
-    """Saves the transformed dictionary to disk."""
+def save_prices_to_cache(ticker: str, data: Dict[str, dict], period: str = "1y") -> None:
+    """Saves the transformed dictionary to disk, keyed by ticker + period + date.
+
+    The period is part of the key so a shallow (1y) cache never silently
+    satisfies a request that needs deeper (5y) history — point-in-time backtests
+    over older dates require the deeper window.
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     today_str = datetime.now().strftime("%Y%m%d")
-    out_path = CACHE_DIR / f"{ticker}_{today_str}.json"
+    out_path = CACHE_DIR / f"{ticker}_{period}_{today_str}.json"
 
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
-def load_latest_cache(ticker: str) -> Optional[Dict[str, dict]]:
-    """Loads the most recently cached JSON for a given ticker."""
+def load_latest_cache(ticker: str, period: str = "1y") -> Optional[Dict[str, dict]]:
+    """Loads the most recently cached JSON for a given ticker at the given period depth."""
     if not CACHE_DIR.exists():
         return None
 
-    matches = sorted(CACHE_DIR.glob(f"{ticker}_*.json"))
+    matches = sorted(CACHE_DIR.glob(f"{ticker}_{period}_*.json"))
     if not matches:
         return None
 
@@ -130,22 +135,25 @@ def load_latest_cache(ticker: str) -> Optional[Dict[str, dict]]:
 
 def process_ticker(ticker: str, period: str = "1y") -> Dict[str, dict]:
     """Pipeline to forcibly Fetch -> Transform -> Cache."""
-    logger.info(f"Fetching fresh data for {ticker}...")
+    logger.info(f"Fetching fresh data for {ticker} (period={period})...")
     raw = fetch_raw_history(ticker, period)
     records = transform_history_records(raw)
-    save_prices_to_cache(ticker, records)
+    save_prices_to_cache(ticker, records, period)
     return records
 
 
-def get_prices(ticker: str) -> Dict[str, dict]:
+def get_prices(ticker: str, period: str = "1y") -> Dict[str, dict]:
     """
     Primary data access method for downstream modules (technicals, etc.).
     Tries to load from cache; if missing, automatically fetches and caches.
+
+    period: "1y" (default, live decisions) or "5y" (point-in-time backtests
+    that need history before the earliest decision date plus indicator lookback).
     """
-    records = load_latest_cache(ticker)
+    records = load_latest_cache(ticker, period)
     if not records:
-        logger.info(f"Cache miss for {ticker}. Initiating fetch...")
-        records = process_ticker(ticker)
+        logger.info(f"Cache miss for {ticker} (period={period}). Initiating fetch...")
+        records = process_ticker(ticker, period)
 
     if not records:
         raise ValueError(f"Failed to retrieve or fetch price data for {ticker}")

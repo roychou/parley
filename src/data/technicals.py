@@ -86,13 +86,20 @@ def process_ticker(ticker: str) -> TechnicalsSnapshot:
     )
 
 
-def get_technicals_as_of(ticker: str, as_of_date: str, sma_window: int = 20, rsi_window: int = 14) -> TechnicalsSnapshot | None:
+def get_technicals_as_of(
+    ticker: str,
+    as_of_date: str,
+    sma_window: int = 20,
+    rsi_window: int = 14,
+    price_period: str = "5y",
+) -> TechnicalsSnapshot | None:
     """Point-in-time technicals snapshot computed from prices up to and including `as_of_date`.
 
     Returns None if insufficient history (need at least sma_window data points
-    available on or before as_of_date).
+    available on or before as_of_date). price_period defaults to "5y" so older
+    backtest dates have trailing history; a 1y window starves early decision dates.
     """
-    raw_data = get_prices(ticker)
+    raw_data = get_prices(ticker, price_period)
     df = pd.DataFrame.from_dict(raw_data, orient="index")
     df.sort_index(inplace=True)
 

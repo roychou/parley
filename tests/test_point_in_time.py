@@ -83,7 +83,7 @@ def test_get_fundamentals_as_of_picks_most_recent_eligible_filing(monkeypatch, t
     monkeypatch.setattr(
         fund_mod,
         "_get_prices_dict",
-        lambda ticker: {"2024-09-15": {"close": 420.0}, "2024-09-16": {"close": 425.0}},
+        lambda ticker, period="5y": {"2024-09-15": {"close": 420.0}, "2024-09-16": {"close": 425.0}},
     )
 
     # As of 2024-09-15: latest eligible filing is 2024-07-30 (NOT 2025-07-30 — that hadn't happened yet)
@@ -104,7 +104,9 @@ def test_get_fundamentals_as_of_returns_none_when_no_eligible_filing(monkeypatch
          "profit_margin": 0.36, "rev_growth_yoy": 0.15, "debt_to_equity": 0.33},
     ]
     monkeypatch.setattr(fund_mod, "get_filings_history", lambda ticker: fake_filings)
-    monkeypatch.setattr(fund_mod, "_get_prices_dict", lambda ticker: {"2020-01-01": {"close": 100.0}})
+    monkeypatch.setattr(
+        fund_mod, "_get_prices_dict", lambda ticker, period="5y": {"2020-01-01": {"close": 100.0}}
+    )
 
     snap = get_fundamentals_as_of("TEST", "2020-01-01")
     assert snap is None
@@ -121,7 +123,7 @@ def test_get_fundamentals_as_of_falls_back_to_most_recent_price_before_date(monk
     monkeypatch.setattr(
         fund_mod,
         "_get_prices_dict",
-        lambda ticker: {"2026-03-13": {"close": 395.0}},
+        lambda ticker, period="5y": {"2026-03-13": {"close": 395.0}},
     )
 
     snap = get_fundamentals_as_of("TEST", "2026-03-14")
