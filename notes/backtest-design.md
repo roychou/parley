@@ -222,25 +222,32 @@ These are honest, not embarrassing. Disclosing them is part of the methodology b
 
 ---
 
-## Implementation sequencing (Days 38–46)
+## Implementation sequencing (Days 37–52)
 
-> **Re-baselined Fri 29 May.** Days 38–41 were pulled forward and completed by 28–29 May, ahead of the original one-milestone-per-day estimate. Day 42 is now today's work. Remaining dates re-anchored from today; ship date held at Fri 12 Jun, so the buffer grew. "Day N" is a milestone counter, not a calendar day — the dates are estimates.
+> **Re-baselined again end of Fri 29 May.** Day 42 *and* a large chunk of Release 2
+> were completed today, far ahead of plan: the data layer pivoted FMP → SEC EDGAR
+> (FMP's free tier blocked deep/quarterly/constituent data), and the full
+> point-in-time S&P 500 universe funnel was built. Remaining days re-anchored around
+> the chosen fork: **build the qualitative layer + run the new S&P 500 funnel.** The
+> original "15-ticker Release 1 run" is **superseded** by the S&P 500 funnel. "Day N"
+> is a milestone counter, not a calendar day.
 
 | Day | Scope | Status |
 |---|---|---|
-| 37 (Thu 28 May) | Data layer: FMP migration (fundamentals + prices), point-in-time filing dates via `ValuationSnapshot.report_date`. | ✅ Done |
-| 38 (by Fri 29 May) | FMP migration verified live; all 9 eval tests re-run green against FMP data. | ✅ Done |
-| 39 (by Fri 29 May) | Backtest skeleton: `portfolio.py`, `metrics.py` (pure functions, fully tested). | ✅ Done |
-| 40 (by Fri 29 May) | `strategies.py` — all 5 strategies on the `decide_all()` interface. Multi-agent takes an injectable `decision_provider` (stubbed in tests). | ✅ Done |
-| 41 (by Fri 29 May) | `replay.py` + `cache.py` + `backtest_supervisor.py`. Unit-tested. | ✅ Done |
-| 42 (Fri 29 May — today) | Wire the real cached `run_backtest_supervisor` in as `MultiAgentStrategy`'s `decision_provider` in a runnable entrypoint. First small-window run (1 month, 3 tickers) to validate end-to-end. | ◀ In progress |
-| 43 (Mon 1 Jun) | Full 6-month, 15-ticker run. Analyze outputs. Fix bugs. | |
-| 44 (Tue 2 Jun) | Metrics validation, comparison table generation, sanity checks on baselines. | |
-| 45 (Wed 3 Jun) | Blog post draft. | |
-| 46 (Thu 4 Jun) | Blog post polish, repo README update, release tag. | |
-| 47–52 | Buffer / final pass. Release 1 ships Fri 12 Jun (Day 52). | |
+| 37 (Thu 28 May) | Data layer: FMP migration (fundamentals + prices), point-in-time filing dates. | ✅ Done |
+| 38–41 (by Fri 29 May) | Eval re-verify; backtest skeleton (`portfolio`, `metrics`); 5 strategies on `decide_all`; `replay` + `cache` + `backtest_supervisor`. Unit-tested. | ✅ Done |
+| 42 (Fri 29 May) | Wire the real cached supervisor into `MultiAgentStrategy`; first small-window run validated end-to-end. | ✅ Done |
+| 42+ (Fri 29 May, pulled forward) | **Release-1 hardening:** cadence decoupling (daily MTM / weekly decisions, daily-annualized Sharpe), signal-level cache + P/E-band reuse, price-depth fix. | ✅ Done |
+| 42+ (Fri 29 May, pulled forward) | **Data pivot:** fundamentals → SEC EDGAR (point-in-time XBRL, deep history, real quarterly YoY); live path on EDGAR; versioned filings cache. | ✅ Done |
+| 42+ (Fri 29 May, pulled forward) | **Universe funnel:** point-in-time S&P 500 (free CSV) + event-driven candidate screen + dynamic `universe_loader` in replay + staggered backfill runner + `run.py --sp500`. | ✅ Done |
+| 43 (Mon 1 Jun) | **Qualitative layer:** RLM scaffold design + EDGAR Phase 2 (narrative/sentiment specialist). **+ S&P 500 funnel:** kick off the staggered backfill (prices stagger ~2 days at 250/day) and start the first index-scale run. | ◀ Next |
+| 44 (Tue 2 Jun) | Backfill completes; full S&P 500 funnel run end-to-end; analyze outputs; fix bugs. | |
+| 45 (Wed 3 Jun) | Metrics + comparison table (multi-agent incl. sentiment vs baselines); sanity checks. | |
+| 46 (Thu 4 Jun) | Blog post draft. | |
+| 47 (Fri 5 Jun) | Blog polish, repo README update, release tag. | |
+| 48–52 | Buffer / final pass. Ship target Fri 12 Jun. | |
 
-Slack: ~6 days buffer before the ship date after the re-baseline. If FMP coverage or any single sub-task burns more than expected, the slack absorbs without slipping ship.
+Slack: the scope grew (EDGAR + S&P 500 + sentiment is effectively Release 1+2 merged), so the buffer is tighter than the prior re-baseline. The backfill's ~2-day price stagger is the main pacing constraint on the full run; the qualitative layer fills Day 43 productively while prices download in the background.
 
 ---
 
