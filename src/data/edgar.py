@@ -119,30 +119,59 @@ def ticker_to_cik(ticker: str) -> str:
 # ==========================================
 
 
-def recent_filing_dates(ticker: str, forms: tuple[str, ...] = ("10-Q", "10-K")) -> list[str]:
-    """Sorted filing dates (YYYY-MM-DD) for the given forms, from the lean submissions API.
-
-    Used by the event-driven candidate screen ("did this name just file?"). The
-    submissions endpoint is far cheaper than companyfacts — one small call per
-    ticker — so the screen runs over the whole universe without pulling full
-    financials for names that won't be analyzed.
-    """
+def _submissions(ticker: str) -> dict:
+    """Cached SEC submissions blob for a ticker (lean — far cheaper than companyfacts)."""
     cik = ticker_to_cik(ticker)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     today = date.today().strftime("%Y%m%d")
     cache_path = CACHE_DIR / f"{ticker.upper()}_submissions_{today}.json"
     if cache_path.exists():
-        data = json.loads(cache_path.read_text())
-    else:
-        data = _get(f"{SEC_DATA_BASE}/submissions/CIK{cik}.json")
-        cache_path.write_text(json.dumps(data))
-    recent = data.get("filings", {}).get("recent", {})
+        return json.loads(cache_path.read_text())
+    data = _get(f"{SEC_DATA_BASE}/submissions/CIK{cik}.json")
+    cache_path.write_text(json.dumps(data))
+    return data
+
+
+def recent_filings(ticker: str, forms: tuple[str, ...] = ("10-Q", "10-K")) -> list[dict]:
+    """Structured recent filings, newest first: {form, filed, accession, primary_document}.
+
+    `accession` is dash-stripped (ready for the Archives URL). Used by the sentiment
+    specialist to locate the actual filing document.
+    """
+    recent = _submissions(ticker).get("filings", {}).get("recent", {})
+    forms_list = recent.get("form", [])
+    filed_list = recent.get("filingDate", [])
+    acc_list = recent.get("accessionNumber", [])
+    doc_list = recent.get("primaryDocument", [])
     out = [
-        fd
-        for form, fd in zip(recent.get("form", []), recent.get("filingDate", []))
+        {
+            "form": form,
+            "filed": filed,
+            "accession": acc.replace("-", ""),
+            "primary_document": doc,
+        }
+        for form, filed, acc, doc in zip(forms_list, filed_list, acc_list, doc_list)
         if form in forms
     ]
-    return sorted(out)
+    out.sort(key=lambda f: f["filed"], reverse=True)
+    return out
+
+
+def recent_filing_dates(ticker: str, forms: tuple[str, ...] = ("10-Q", "10-K")) -> list[str]:
+    """Sorted filing dates (YYYY-MM-DD) for the given forms — the event screen's "did
+    this name just file?" check. Derived from the same cached submissions blob."""
+    return sorted(f["filed"] for f in recent_filings(ticker, forms))
+
+
+def _get_text(url: str) -> str:
+    """GET a URL and return raw text (filing documents are HTML, not JSON)."""
+    try:
+        resp = requests.get(url, headers={"User-Agent": _user_agent()}, timeout=TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        raise EdgarError(f"EDGAR request failed: {e}") from e
+    if resp.status_code != 200:
+        raise EdgarError(f"EDGAR returned {resp.status_code} for {url}: {resp.text[:200]}")
+    return resp.text
 
 
 def fetch_company_facts(ticker: str) -> dict:
