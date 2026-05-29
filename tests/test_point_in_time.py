@@ -1,66 +1,15 @@
 """Tests for the point-in-time data layer helpers.
 
-These tests exercise the as-of-date selection logic without hitting FMP.
-End-to-end integration with real FMP is validated by the manual smoke run
-in the Day 41 session log.
+These tests exercise the as-of-date selection logic with stubbed filings (no
+network). End-to-end EDGAR extraction is covered by tests/test_edgar.py.
 """
-import json
 
 import pytest
 
 from src.data import fundamentals as fund_mod
 from src.data.fundamentals import (
-    ValuationSnapshot,
-    _build_raw_from_filings,
     get_fundamentals_as_of,
 )
-
-
-# ==========================================
-# _build_raw_from_filings — pure builder
-# ==========================================
-
-
-def test_build_raw_from_filings_uses_filing_date_for_report_date():
-    latest_income = {
-        "date": "2025-06-30",            # period end
-        "filingDate": "2025-07-30",       # actual filing date
-        "acceptedDate": "2025-07-30 16:11:40",
-        "revenue": 280_000_000_000,
-        "netIncome": 100_000_000_000,
-        "epsDiluted": 13.50,
-    }
-    prior_income = {"date": "2024-06-30", "revenue": 245_000_000_000}
-    latest_balance = {
-        "date": "2025-06-30",
-        "totalDebt": 100_000_000_000,
-        "totalStockholdersEquity": 340_000_000_000,
-    }
-
-    out = _build_raw_from_filings(latest_income, prior_income, latest_balance)
-
-    assert out["report_date"] == "2025-07-30"          # filing date, not period end
-    assert out["period_end_date"] == "2025-06-30"
-    assert out["diluted_eps"] == pytest.approx(13.50)
-    assert out["profit_margin"] == pytest.approx(100 / 280)
-    # YoY: (280 - 245) / 245
-    assert out["rev_growth_yoy"] == pytest.approx((280 - 245) / 245)
-    assert out["debt_to_equity"] == pytest.approx(100 / 340)
-
-
-def test_build_raw_from_filings_falls_back_to_accepted_date():
-    # No filingDate — use acceptedDate
-    latest_income = {
-        "date": "2025-06-30",
-        "acceptedDate": "2025-07-30 16:11:40",
-        "revenue": 100, "netIncome": 20, "epsDiluted": 1.0,
-    }
-    prior_income = {"date": "2024-06-30", "revenue": 90}
-    latest_balance = {"date": "2025-06-30", "totalDebt": 50, "totalStockholdersEquity": 100}
-
-    out = _build_raw_from_filings(latest_income, prior_income, latest_balance)
-    assert out["report_date"] == "2025-07-30"   # space-split takes the date part
-
 
 # ==========================================
 # get_fundamentals_as_of — point-in-time selection

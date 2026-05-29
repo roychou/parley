@@ -74,6 +74,22 @@ def sp500_as_of(date: str) -> list[str]:
     return sorted(members)
 
 
+def sp500_members_in_range(start_date: str, end_date: str) -> list[str]:
+    """Sorted tickers that were S&P 500 members at any point in [start_date, end_date].
+
+    A membership spell [s, e] overlaps the window iff s <= end_date and e >= start_date.
+    This is the exact set of names a backtest over the window can touch — including
+    ones that left mid-window — so it's what the backfill should seed (vs a single
+    as-of snapshot, which misses names that dropped out before the end date).
+    """
+    members = {
+        ticker
+        for ticker, start, end in _load_membership()
+        if start <= end_date and end >= start_date
+    }
+    return sorted(members)
+
+
 def current_sp500() -> list[str]:
     """Current S&P 500 membership (for live use), as of today."""
     return sp500_as_of(dt.date.today().isoformat())

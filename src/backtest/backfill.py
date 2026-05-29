@@ -149,6 +149,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Backfill caches for a full backtest.")
     parser.add_argument("--as-of", default=None, help="S&P 500 date (YYYY-MM-DD); default current.")
+    parser.add_argument("--start", default=None, help="Window start; with --end seeds the union.")
+    parser.add_argument("--end", default=None, help="Window end (use with --start).")
     parser.add_argument("--tickers", nargs="+", default=None, help="Explicit tickers.")
     parser.add_argument("--price-period", default="5y", choices=["1y", "5y"])
     parser.add_argument("--fmp-daily-cap", type=int, default=240)
@@ -157,11 +159,16 @@ def main() -> None:
     parser.add_argument("--skip-submissions", action="store_true")
     args = parser.parse_args()
 
+    from src.data.universe import current_sp500, sp500_as_of, sp500_members_in_range
+
     if args.tickers:
         tickers = args.tickers
+    elif args.start and args.end:
+        tickers = sp500_members_in_range(args.start, args.end)  # union over the window
+    elif args.as_of:
+        tickers = sp500_as_of(args.as_of)
     else:
-        from src.data.universe import current_sp500, sp500_as_of
-        tickers = sp500_as_of(args.as_of) if args.as_of else current_sp500()
+        tickers = current_sp500()
 
     logger.info(f"Backfilling {len(tickers)} tickers (price_period={args.price_period}, "
                 f"fmp_cap={args.fmp_daily_cap})...")

@@ -42,3 +42,15 @@ def test_boundaries_inclusive(monkeypatch, tmp_path):
 def test_short_early_stint(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     assert universe.sp500_as_of("2008-06-01") == ["CCC"]
+
+
+def test_members_in_range_unions_overlapping_spells(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    # 2013-2021 spans AAA's gap: both AAA spells overlap, BBB throughout; CCC gone by 2009.
+    assert universe.sp500_members_in_range("2013-01-01", "2021-01-01") == ["AAA", "BBB"]
+
+
+def test_members_in_range_excludes_non_overlapping(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    # 2008 window: only CCC's spell overlaps.
+    assert universe.sp500_members_in_range("2008-06-01", "2008-12-31") == ["CCC"]

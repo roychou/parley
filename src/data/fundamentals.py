@@ -6,9 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from src.data.fetch_prices import get_latest_close
-from src.data.fmp_client import FMPError, get_balance_sheet, get_income_statement
-
 # --- Logging & Config ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -87,118 +84,27 @@ def calc_debt_equity(debt: float, equity: float) -> float:
     return float(debt / equity)
 
 
-def _safe_float(value: Any) -> float:
-    """Coerce FMP-returned values to float, defaulting to NaN for missing/invalid."""
-    if value is None:
-        return float("nan")
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float("nan")
-
-
-# ==========================================
-# 2. I/O FUNCTIONS & CACHE MANAGEMENT
-# ==========================================
-
-
-def fetch_fmp_raw_fundamentals(ticker: str) -> dict:
-    """Fetches data from FMP and returns a raw dictionary.
-
-    Uses the most recent annual filing. Returns both `report_date` (actual
-    filing date, FMP `acceptedDate`) and `period_end_date` (fiscal period close).
-    """
-    income = get_income_statement(ticker, limit=2)
-    balance = get_balance_sheet(ticker, limit=1)
-
-    if len(income) < 2:
-        raise FMPError(
-            f"Need at least two annual income statements for {ticker} to compute YoY growth; got {len(income)}"
-        )
-
-    return _build_raw_from_filings(
-        latest_income=income[0],
-        prior_income=income[1],
-        latest_balance=balance[0],
-    )
-
-
-def fetch_fmp_all_filings_raw(ticker: str, limit: int = 5) -> list[dict]:
-    """Returns a list of point-in-time raw fundamentals dicts, most recent first.
-
-    Each entry has the same shape as `fetch_fmp_raw_fundamentals` returns, but
-    represents a single historical filing rather than just the latest. The list
-    contains up to N-1 entries when N income statements are available (the oldest
-    is used only as the YoY prior-revenue reference for the next-oldest filing).
-
-    `limit` is capped to 5 by FMP's free tier. Five annual filings cover a 4-year
-    backtest window (the oldest is the YoY-reference for the next-oldest).
-
-    Used by `get_fundamentals_as_of` for point-in-time backtest replay.
-    """
-    income = get_income_statement(ticker, limit=min(limit, 5))
-    balance = get_balance_sheet(ticker, limit=min(limit, 5))
-
-    if len(income) < 2:
-        raise FMPError(
-            f"Need at least two annual income statements for {ticker} to build a filing history; got {len(income)}"
-        )
-
-    balance_by_period = {b["date"]: b for b in balance}
-
-    out: list[dict] = []
-    for i in range(len(income) - 1):
-        latest_income = income[i]
-        prior_income = income[i + 1]
-        latest_balance = balance_by_period.get(latest_income["date"])
-        if latest_balance is None:
-            # No matching balance sheet for this period; skip
-            continue
-        out.append(_build_raw_from_filings(latest_income, prior_income, latest_balance))
-    return out
-
-
-def _build_raw_from_filings(latest_income: dict, prior_income: dict, latest_balance: dict) -> dict:
-    """Pure builder: combines paired FMP filing dicts into our raw fundamentals shape."""
-    # FMP returns acceptedDate as "YYYY-MM-DD HH:MM:SS"; strip to date.
-    # filingDate is a clean "YYYY-MM-DD" — prefer it if present.
-    filing = latest_income.get("filingDate") or latest_income.get("acceptedDate") or latest_income.get("date")
-    report_date = filing.split(" ")[0] if isinstance(filing, str) else filing
-
-    diluted_eps = _safe_float(latest_income.get("epsDiluted"))
-    net_income = _safe_float(latest_income.get("netIncome"))
-    curr_revenue = _safe_float(latest_income.get("revenue"))
-    prev_revenue = _safe_float(prior_income.get("revenue"))
-    total_debt = _safe_float(latest_balance.get("totalDebt"))
-    equity = _safe_float(latest_balance.get("totalStockholdersEquity"))
-
-    return {
-        "report_date": report_date,
-        "period_end_date": latest_income.get("date"),
-        "diluted_eps": diluted_eps,
-        "profit_margin": calc_margin(net_income, curr_revenue),
-        "rev_growth_yoy": calc_growth_yoy(curr_revenue, prev_revenue),
-        "debt_to_equity": calc_debt_equity(total_debt, equity),
-    }
-
-
 # ==========================================
 # POINT-IN-TIME: filings history cache + as-of lookup
 # ==========================================
 
 
 FILINGS_CACHE_DIR = CACHE_DIR.parent / "filings_history"
+# Part of the cache key so a change to the extraction logic doesn't serve stale
+# filings (the cache is otherwise keyed only by ticker+date). Bump when
+# build_filings_history changes.
+FILINGS_CACHE_VERSION = "edgar-v1"
 
 
 def _filings_cache_path(ticker: str) -> Path:
     FILINGS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     today_str = datetime.now().strftime("%Y%m%d")
-    return FILINGS_CACHE_DIR / f"{ticker}_{today_str}.json"
+    return FILINGS_CACHE_DIR / f"{ticker}_{FILINGS_CACHE_VERSION}_{today_str}.json"
 
 
 def _load_filings_cache(ticker: str) -> list[dict] | None:
     FILINGS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    matches = sorted(FILINGS_CACHE_DIR.glob(f"{ticker}_*.json"))
+    matches = sorted(FILINGS_CACHE_DIR.glob(f"{ticker}_{FILINGS_CACHE_VERSION}_*.json"))
     if not matches:
         return None
     try:
@@ -215,11 +121,11 @@ def _save_filings_cache(ticker: str, filings: list[dict]) -> None:
 
 
 def get_filings_history(ticker: str) -> list[dict]:
-    """Returns the full list of point-in-time raw filings for a ticker.
+    """Returns the full list of point-in-time raw filings for a ticker (from EDGAR).
 
-    Uses an on-disk cache (keyed by ticker + today's date) so repeated calls
-    within the same day don't hit FMP. Cache files persist across days; the
-    most recent file is preferred.
+    Uses an on-disk cache keyed by ticker + extraction version + date, so repeated
+    calls within the same day don't refetch and a version bump invalidates stale
+    extractions. Cache files persist across days; the most recent is preferred.
     """
     cached = _load_filings_cache(ticker)
     if cached is not None:
@@ -310,27 +216,13 @@ def load_latest_cache(ticker: str) -> Optional[ValuationSnapshot]:
 
 
 def process_ticker(ticker: str) -> ValuationSnapshot:
-    """Pipeline to forcefully Fetch -> Compute -> Cache -> Return."""
-    logger.info(f"Fetching fresh FMP fundamentals for {ticker}...")
-
-    try:
-        latest_price_date, current_price = get_latest_close(ticker)
-    except Exception as e:
-        raise RuntimeError(f"Cannot build snapshot. Failed to load prices for {ticker}: {e}")
-
-    raw_funds = fetch_fmp_raw_fundamentals(ticker)
-
-    snapshot = ValuationSnapshot(
-        price_date=latest_price_date,
-        report_date=raw_funds["report_date"],
-        period_end_date=raw_funds["period_end_date"],
-        diluted_eps=raw_funds["diluted_eps"],
-        profit_margin=raw_funds["profit_margin"],
-        rev_growth_yoy=raw_funds["rev_growth_yoy"],
-        debt_to_equity=raw_funds["debt_to_equity"],
-        pe_ratio=calc_pe(current_price, raw_funds["diluted_eps"]),
-    )
-
+    """Live fetch: build the latest snapshot from SEC EDGAR (same source as the
+    backtest path) and cache it. 1y price window is enough for today's P/E."""
+    logger.info(f"Fetching fresh EDGAR fundamentals for {ticker}...")
+    today = datetime.now().strftime("%Y-%m-%d")
+    snapshot = get_fundamentals_as_of(ticker, today, price_period="1y")
+    if snapshot is None:
+        raise RuntimeError(f"No fundamentals available for {ticker} as of {today}")
     save_snapshot_to_cache(ticker, snapshot)
     return snapshot
 
