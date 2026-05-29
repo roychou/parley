@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 PriceLoader = Callable[[str], dict[str, dict]]  # ticker -> {date -> ohlcv dict}
 FundamentalsLoader = Callable[[str, str], ValuationSnapshot | None]  # (ticker, date) -> snapshot or None
+UniverseLoader = Callable[[str], list[str]]  # date -> eligible tickers as of that date
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,13 @@ class BacktestConfig:
     stop_loss_pct: float | None = -0.20
     extra_tickers: list[str] = field(default_factory=lambda: ["SPY"])  # baseline tickers outside the universe
     periods_per_year: int = 252  # daily equity curve (per MTM); Sharpe annualized daily
+    # Point-in-time universe. When set, the eligible universe is recomputed each
+    # decision date (e.g. S&P 500 as-of). When None, the static `universe` is used
+    # for every date (backward compatible).
+    universe_loader: UniverseLoader | None = None
+
+    def universe_at(self, date: str) -> list[str]:
+        return self.universe_loader(date) if self.universe_loader is not None else self.universe
 
 
 @dataclass
@@ -91,10 +99,15 @@ async def run_backtest(
     if not config.decision_dates:
         raise ValueError("decision_dates is empty")
 
-    # Pre-load all price history (caller's loader is responsible for caching)
-    all_tickers = list(config.universe) + list(config.extra_tickers)
+    # Pre-load all price history (caller's loader is responsible for caching).
+    # Union the per-date eligible universes so a name held after it leaves the
+    # universe still has prices for mark-to-market. With no universe_loader this
+    # is just the static universe.
+    universe_union: set[str] = set(config.extra_tickers)
+    for d in config.decision_dates:
+        universe_union.update(config.universe_at(d))
     price_history: dict[str, dict[str, dict]] = {
-        ticker: price_loader(ticker) for ticker in all_tickers
+        ticker: price_loader(ticker) for ticker in sorted(universe_union)
     }
 
     # One Portfolio per strategy
@@ -129,10 +142,14 @@ async def run_backtest(
         prices_at_date = _prices_at(price_history, date)
         is_decision_day = date in decision_set
 
+        # Eligible universe as of this decision date (point-in-time when a loader
+        # is configured; the static universe otherwise).
+        universe_today = config.universe_at(date) if is_decision_day else []
+
         # Fundamentals are only consumed when strategies decide.
         fundamentals_at_date: dict[str, ValuationSnapshot] = {}
         if is_decision_day:
-            for ticker in config.universe:
+            for ticker in universe_today:
                 snap = fundamentals_loader(ticker, date)
                 if snap is not None:
                     fundamentals_at_date[ticker] = snap
@@ -149,7 +166,7 @@ async def run_backtest(
                 continue
 
             actions = await strategy.decide_all(
-                universe=config.universe,
+                universe=universe_today,
                 date=date,
                 price_history=price_history,
                 fundamentals_by_ticker=fundamentals_at_date,

@@ -297,6 +297,40 @@ async def test_daily_stop_loss_triggers_between_decisions():
 
 
 @pytest.mark.asyncio
+async def test_universe_loader_feeds_per_date_eligible_set():
+    """With a universe_loader, each decision date sees its own eligible universe,
+    and prices for the union are preloaded (a name eligible on only one date works)."""
+    dates = ["2026-01-09", "2026-01-16"]
+    eligible = {"2026-01-09": ["AAA", "BBB"], "2026-01-16": ["BBB", "CCC"]}
+
+    bar = {"open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0, "volume": 1000}
+    history = {t: {d: bar for d in dates} for t in ["AAA", "BBB", "CCC", "SPY"]}
+
+    def price_loader(ticker): return history[ticker]
+    def fundamentals_loader(t, d): return None
+
+    analyzed: dict[str, list[str]] = {}
+
+    async def decision_stub(ticker, date):
+        analyzed.setdefault(date, []).append(ticker)
+        return _decision(ticker, "HOLD", 0.6)
+
+    config = BacktestConfig(
+        universe=[],  # unused when a loader is set
+        decision_dates=dates,
+        strategies=[MultiAgentStrategy(decision_provider=decision_stub)],
+        stop_loss_pct=None,
+        universe_loader=lambda d: eligible[d],
+    )
+    result = await run_backtest(config, price_loader, fundamentals_loader)
+
+    assert sorted(analyzed["2026-01-09"]) == ["AAA", "BBB"]
+    assert sorted(analyzed["2026-01-16"]) == ["BBB", "CCC"]
+    # The run completed (CCC, eligible only on date 2, had preloaded prices).
+    assert "multi_agent" in result.outcomes
+
+
+@pytest.mark.asyncio
 async def test_replay_handles_missing_prices_gracefully():
     universe = ["AAA"]
     # AAA has no price for one of the decision dates (delisted/halt simulation)
