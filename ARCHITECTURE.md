@@ -18,6 +18,7 @@ Release 1 ships: supervisor, two specialists (fundamentals, technicals), determi
 - `src/evals/base.py` — `EvalProtocol` and `EvalResult` contracts
 - `evals/fundamentals/grounding.py`, `evals/technicals/grounding.py` — grounding eval per specialist
 - `src/data/fundamentals.py`, `src/data/technicals.py`, `src/data/fetch_prices.py` — data pipelines
+- `src/data/fmp_client.py` — thin REST wrapper for the FMP stable API (single data provider for both fundamentals and prices)
 
 ## Multi-agent over single-agent
 
@@ -57,11 +58,15 @@ Pydantic-everywhere makes specialist outputs comparable across runs (the eval ha
 
 Fundamentals data and technicals data have fundamentally different update cadences, which shapes the data layer design.
 
-Fundamentals data (revenue, EPS, margins, P/E, debt ratios) comes from quarterly filings. The data changes four times a year. The fundamentals pipeline fetches from yfinance and caches to disk (`data/cache/fundamentals/`). Re-fetching on every run is wasteful; a cache with a TTL that aligns with reporting cadence is the right design. The specialist reads cached data unless the cache is stale.
+Fundamentals data (revenue, EPS, margins, P/E, debt ratios) comes from quarterly filings. The data changes four times a year. The fundamentals pipeline fetches from FMP (Financial Modeling Prep, `stable` API, sourced from SEC EDGAR filings) and caches to disk (`data/cache/fundamentals/`). Re-fetching on every run is wasteful; a cache with a TTL that aligns with reporting cadence is the right design. The specialist reads cached data unless the cache is stale.
 
-Technicals data (price history, SMA, RSI) changes daily. The technicals pipeline fetches fresh price history from yfinance on each run and computes indicators in-process. Caching is not appropriate here — the value of the technicals signal depends on it being current.
+`ValuationSnapshot.report_date` is the **actual SEC filing date** (FMP `filingDate`/`acceptedDate`), not the fiscal period-end. This matters for the backtest: companies file 60–90 days after period close, so the filing date is the correct availability anchor for point-in-time-accurate replay. `period_end_date` is preserved as a separate field for reference.
+
+Technicals data (price history, SMA, RSI) changes daily. The technicals pipeline fetches fresh price history from FMP on each run and computes indicators in-process. Caching is not appropriate here — the value of the technicals signal depends on it being current.
 
 This two-regime split — slow-moving filings vs. fast-moving price data — maps to the two MCP servers and the two data pipelines. It's why the fundamentals server and the technicals server have different data access patterns even though they look structurally identical from the outside.
+
+**Single-provider data layer.** Both data types route through `src/data/fmp_client.py` — a thin REST wrapper around FMP's stable API. The wrapper exposes three endpoints (`income-statement`, `balance-sheet-statement`, `historical-price-eod/full`). The exported interfaces (`get_prices()`, `get_fundamentals()`) are stable across data-provider changes; downstream code (MCP servers, agents, specialists, evals) is provider-agnostic.
 
 ## Eval approach
 
@@ -91,6 +96,7 @@ The decision to keep the surface narrow is itself architectural. Every additiona
 - **Model selection.** `judge.py` defaults to `claude-sonnet-4-6` with a single-line swap to Haiku. If API cost forces a cheaper model for some eval types, that's a per-eval decision, not a system-wide change. Specialists currently use Sonnet; the token logging convention lets cost be derived from logs before committing to a cheaper model.
 - **MCP server reusability.** The reusability claim weakens if both MCP servers turn out to be thin wrappers with no logic worth sharing. The protocol-isolation argument remains valid regardless.
 - **Fundamentals cache TTL.** The cache design assumes quarterly data. If a ticker reports mid-quarter corrections or the cache grows stale in test environments, the TTL logic will need explicit handling. Not designed yet.
+- **Sector-blind fundamentals thresholds.** The fundamentals specialist prompt uses absolute thresholds (P/E < 40, margin > 20%, D/E < 2). These thresholds are not sector-agnostic in practice — banks, REITs, utilities, and retailers all have structurally different valuation and margin profiles. The current rules will produce systematic BEARISH bias in capital-intensive and low-margin sectors. Acknowledged limitation; sector context (a `sector` field in the fundamentals tool result) and sector-relative comparisons are planned for Release 2. See `notes/release-2-or-3-candidates.md`.
 - **`supporting_technicals` schema and temporal claims.** The DIRECTIONAL/TEMPORAL grounding rule requires explicit lookback metadata (e.g., "20-day momentum") to evaluate trend claims. `TechnicalsAnalysis` currently has `date_range` but no per-indicator lookback window. This is not a blocking gap for current eval runs — planted-failure tests confirmed the judge correctly flags trend claims without temporal grounding. It becomes a real gap when the specialist starts making legitimate trend claims that should be grounded but aren't.
 
 This document is updated at end-of-sprint when the gap between the doc and the code becomes large enough to mislead a reader.
