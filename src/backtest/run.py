@@ -8,13 +8,18 @@ tests exercise with stubs.
     cached(run_backtest_supervisor)  ->  MultiAgentStrategy.decision_provider
     get_prices                       ->  run_backtest price_loader
     get_fundamentals_as_of           ->  run_backtest fundamentals_loader
+    sp500_as_of / recent_filing_dates -> point-in-time universe + event screen
 
-Run the default small-window validation (1 month, 3 tickers):
-
+Two modes:
+- Watchlist (default): the static --tickers, multi-agent analyzes them all.
     uv run python -m src.backtest.run
+- S&P 500 (the full funnel): point-in-time index membership -> event-driven
+  candidate screen (fresh quarterly filers + holdings) -> analysis. Seed caches
+  with `python -m src.backtest.backfill` first; expect real LLM cost.
+    uv run python -m src.backtest.run --sp500 --dates ...
 
-Decisions are cached on disk by (ticker, date) under the prompt `version`, so
-re-runs are free until the specialist prompts change (then bump --version).
+Specialist signals are cached on disk (signal cache), so re-runs are cheap until
+the prompts change (then bump --version).
 """
 from __future__ import annotations
 
@@ -31,9 +36,17 @@ from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.cache import SignalCache
 from src.backtest.metrics import StrategyMetrics, compute_metrics
 from src.backtest.replay import BacktestConfig, BacktestResult, run_backtest
-from src.backtest.strategies import MultiAgentStrategy, SPYHoldStrategy
+from src.backtest.strategies import (
+    MultiAgentStrategy,
+    PERankingStrategy,
+    RandomStrategy,
+    RSIStrategy,
+    SPYHoldStrategy,
+)
+from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices
 from src.data.fundamentals import get_fundamentals_as_of
+from src.data.universe import sp500_as_of
 
 load_dotenv()
 
@@ -56,24 +69,52 @@ SIGNAL_CACHE_DIR = Path("data/cache/signals")
 # ==========================================
 
 
-def build_strategies(client: AsyncAnthropic, cache_version: str):
-    """Compose the real signal-cached supervisor into the multi-agent strategy.
+def build_strategies(
+    client: AsyncAnthropic,
+    cache_version: str,
+    filing_dates_fn=None,
+    screen_lookback_days: int = 100,
+):
+    """The comparison set: the multi-agent system under test plus four baselines.
 
-    SPYHold rides along as the market benchmark — it also exercises the
-    deterministic (non-LLM) strategy path end-to-end.
+    filing_dates_fn enables the event-driven candidate screen on the multi-agent
+    strategy (required at index scale; None analyzes the whole given universe).
+    The baselines are deterministic (no LLM) and rank/screen within the universe
+    they're handed each period.
     """
     signal_cache = SignalCache(SIGNAL_CACHE_DIR, default_version=cache_version)
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
     provider = partial(run_backtest_supervisor, client, signal_cache=signal_cache)
-    return [MultiAgentStrategy(decision_provider=provider), SPYHoldStrategy()]
+    return [
+        MultiAgentStrategy(
+            decision_provider=provider,
+            filing_dates_fn=filing_dates_fn,
+            screen_lookback_days=screen_lookback_days,
+        ),
+        SPYHoldStrategy(),
+        RandomStrategy(seed=42),
+        RSIStrategy(),
+        PERankingStrategy(),
+    ]
 
 
-async def run(tickers: list[str], dates: list[str], cache_version: str) -> BacktestResult:
+async def run(
+    tickers: list[str],
+    dates: list[str],
+    cache_version: str,
+    use_sp500: bool = False,
+    screen_lookback_days: int = 100,
+) -> BacktestResult:
     client = AsyncAnthropic()
+    # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
+    # (mandatory at ~500 names). Watchlist mode: the static --tickers, no screen.
+    universe_loader = sp500_as_of if use_sp500 else None
+    filing_dates_fn = recent_filing_dates if use_sp500 else None
     config = BacktestConfig(
-        universe=tickers,
+        universe=[] if use_sp500 else tickers,
         decision_dates=sorted(dates),
-        strategies=build_strategies(client, cache_version),
+        strategies=build_strategies(client, cache_version, filing_dates_fn, screen_lookback_days),
+        universe_loader=universe_loader,
     )
     # 5y depth: a 6-month window plus indicator lookback (e.g. SMA/RSI trailing
     # windows) reaches back well past a 1y price history on the earliest dates.
@@ -145,13 +186,22 @@ def main() -> None:
     parser.add_argument(
         "--version", default="v1", help="Decision-cache version (bump when prompts change)."
     )
+    parser.add_argument(
+        "--sp500", action="store_true",
+        help="Point-in-time S&P 500 universe + event-driven candidate screen "
+             "(vs the static --tickers watchlist). Backfill caches first.",
+    )
+    parser.add_argument(
+        "--screen-lookback-days", type=int, default=100,
+        help="First-decision filing window for the event screen (sp500 mode).",
+    )
     args = parser.parse_args()
 
-    logger.info(
-        f"Backtest: {len(args.tickers)} tickers x {len(args.dates)} dates, "
-        f"cache version={args.version}"
+    scope = "S&P 500 (PIT) + event screen" if args.sp500 else f"{len(args.tickers)} watchlist"
+    logger.info(f"Backtest: {scope} x {len(args.dates)} dates, cache version={args.version}")
+    result = asyncio.run(
+        run(args.tickers, args.dates, args.version, args.sp500, args.screen_lookback_days)
     )
-    result = asyncio.run(run(args.tickers, args.dates, args.version))
     print_summary(result)
 
 
