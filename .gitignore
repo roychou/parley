@@ -14,6 +14,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/cache/
+data/reference/
 
 # Local working notes (not shared)
 _plans/

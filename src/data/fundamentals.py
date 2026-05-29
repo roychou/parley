@@ -224,7 +224,10 @@ def get_filings_history(ticker: str) -> list[dict]:
     cached = _load_filings_cache(ticker)
     if cached is not None:
         return cached
-    filings = fetch_fmp_all_filings_raw(ticker)
+    # Point-in-time fundamentals come from SEC EDGAR (deep history, true filing
+    # dates, real quarterly YoY). Late import avoids a circular dependency.
+    from src.data.edgar import build_filings_history
+    filings = build_filings_history(ticker)
     _save_filings_cache(ticker, filings)
     return filings
 
