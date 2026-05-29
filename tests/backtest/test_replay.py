@@ -221,6 +221,82 @@ async def test_closes_execute_before_opens_in_same_round():
 
 
 @pytest.mark.asyncio
+async def test_daily_mark_to_market_between_weekly_decisions():
+    """Decoupled cadences: decisions fire only on decision_dates, but the equity
+    curve is sampled (and stop-loss checked) on every trading day in the window."""
+    universe = ["AAA"]
+    # Daily prices spanning the window; decisions only on the two endpoints.
+    daily_dates = [f"2026-01-{d:02d}" for d in range(9, 17)]  # 8 consecutive days
+    closes = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]
+    history = {
+        "AAA": {dt: {"open": c, "high": c, "low": c, "close": c, "volume": 1000}
+                for dt, c in zip(daily_dates, closes)},
+        "SPY": {dt: {"open": 400.0, "high": 400.0, "low": 400.0, "close": 400.0, "volume": 1000}
+                for dt in daily_dates},
+    }
+
+    def price_loader(ticker): return history[ticker]
+    def fundamentals_loader(t, d): return None
+
+    decide_calls: list[str] = []
+
+    async def decision_stub(ticker, date):
+        decide_calls.append(date)
+        return _decision(ticker, "BUY", 0.8)
+
+    config = BacktestConfig(
+        universe=universe,
+        decision_dates=["2026-01-09", "2026-01-16"],  # weekly: first + last day only
+        strategies=[MultiAgentStrategy(decision_provider=decision_stub)],
+        stop_loss_pct=None,
+    )
+    result = await run_backtest(config, price_loader, fundamentals_loader)
+
+    outcome = result.outcomes["multi_agent"]
+    # Equity curve has one point per trading day (8), not per decision date (2).
+    assert len(outcome.portfolio.equity_curve) == len(daily_dates)
+    # The strategy decided only on the two decision dates.
+    assert decide_calls == ["2026-01-09", "2026-01-16"]
+    assert len(outcome.decisions) == 2
+
+
+@pytest.mark.asyncio
+async def test_daily_stop_loss_triggers_between_decisions():
+    """A position blowing through the stop-loss mid-week is closed on the daily MTM,
+    not deferred to the next decision date."""
+    universe = ["AAA"]
+    daily_dates = [f"2026-01-{d:02d}" for d in range(9, 17)]
+    # Open at 100 on day 0, then a crash on day 3 (-30%, past the -20% stop).
+    closes = [100.0, 99.0, 98.0, 70.0, 72.0, 74.0, 76.0, 78.0]
+    history = {
+        "AAA": {dt: {"open": c, "high": c, "low": c, "close": c, "volume": 1000}
+                for dt, c in zip(daily_dates, closes)},
+        "SPY": {dt: {"open": 400.0, "high": 400.0, "low": 400.0, "close": 400.0, "volume": 1000}
+                for dt in daily_dates},
+    }
+
+    def price_loader(ticker): return history[ticker]
+    def fundamentals_loader(t, d): return None
+
+    async def decision_stub(ticker, date):
+        return _decision(ticker, "BUY", 0.8)
+
+    config = BacktestConfig(
+        universe=universe,
+        decision_dates=["2026-01-09", "2026-01-16"],
+        strategies=[MultiAgentStrategy(decision_provider=decision_stub)],
+        stop_loss_pct=-0.20,
+    )
+    result = await run_backtest(config, price_loader, fundamentals_loader)
+
+    trades = result.outcomes["multi_agent"].portfolio.closed_trades
+    stop_losses = [t for t in trades if t.exit_reason == "stop_loss"]
+    assert len(stop_losses) == 1
+    # Stopped out on the crash day (2026-01-12), well before the next decision date.
+    assert stop_losses[0].exit_date == "2026-01-12"
+
+
+@pytest.mark.asyncio
 async def test_replay_handles_missing_prices_gracefully():
     universe = ["AAA"]
     # AAA has no price for one of the decision dates (delisted/halt simulation)

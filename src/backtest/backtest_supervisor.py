@@ -33,7 +33,8 @@ from anthropic import AsyncAnthropic
 
 from src.agents.fundamentals_specialist import FUNDAMENTALS_ROLE_PROMPT
 from src.agents.technicals_specialist import TECHNICALS_ROLE_PROMPT
-from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of
+from src.backtest.cache import SignalCache, cached_signal
+from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of, pe_band
 from src.data.technicals import TechnicalsSnapshot, get_technicals_as_of
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
@@ -66,11 +67,18 @@ async def run_backtest_supervisor(
     as_of: str,
     fundamentals_loader: FundamentalsLoader = get_fundamentals_as_of,
     technicals_loader: TechnicalsLoader = get_technicals_as_of,
+    signal_cache: SignalCache | None = None,
 ) -> Decision:
     """Produce a Decision for (ticker, as_of) using point-in-time data and the real LLM.
 
     Loaders default to the production data layer functions. Tests can inject
     stubs to avoid touching FMP.
+
+    signal_cache (optional) caches each specialist analysis independently:
+    - fundamentals key = (filing_date, pe_band) — reused across decision dates
+      until a new filing lands or P/E crosses a threshold band.
+    - technicals key = as_of — they change every trading day.
+    Synthesis is always recomputed from the (cached) signals, so it stays fresh.
     """
     fundamentals_data = fundamentals_loader(ticker, as_of)
     technicals_data = technicals_loader(ticker, as_of)
@@ -80,9 +88,17 @@ async def run_backtest_supervisor(
     if technicals_data is None:
         raise ValueError(f"No technicals data available for {ticker} as of {as_of}")
 
+    fundamentals_key = f"{fundamentals_data.report_date}_pe-{pe_band(fundamentals_data.pe_ratio)}"
+
     fundamentals_analysis, technicals_analysis = await asyncio.gather(
-        _call_fundamentals_with_data(client, ticker, as_of, fundamentals_data),
-        _call_technicals_with_data(client, ticker, as_of, technicals_data),
+        cached_signal(
+            signal_cache, "fundamentals", ticker, fundamentals_key, FundamentalsAnalysis,
+            lambda: _call_fundamentals_with_data(client, ticker, as_of, fundamentals_data),
+        ),
+        cached_signal(
+            signal_cache, "technicals", ticker, as_of, TechnicalsAnalysis,
+            lambda: _call_technicals_with_data(client, ticker, as_of, technicals_data),
+        ),
     )
 
     return synthesize(

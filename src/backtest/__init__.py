@@ -18,7 +18,7 @@ from src.backtest.strategies import (
     Strategy,
     compute_rsi,
 )
-from src.backtest.cache import DecisionCache, make_cached_provider
+from src.backtest.cache import SignalCache, cached_signal
 from src.backtest.replay import (
     BacktestConfig,
     BacktestResult,

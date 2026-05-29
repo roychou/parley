@@ -117,10 +117,15 @@ def compute_metrics(
     equity_curve: list[EquitySnapshot],
     closed_trades: list[Trade],
     spy_equity_curve: list[EquitySnapshot] | None = None,
+    periods_per_year: int = 252,
 ) -> StrategyMetrics:
     """Aggregate the full metric suite for one strategy.
 
     Pass an SPY buy-and-hold equity curve to get excess_return_vs_spy populated.
+    periods_per_year must match how often the equity curve is sampled: 252 for a
+    daily curve (the default, since mark-to-market runs every trading day), 52 if
+    the curve is sampled weekly. Mismatching it mis-annualizes Sharpe by
+    sqrt(actual / assumed).
     """
     excess = None
     if spy_equity_curve:
@@ -129,7 +134,7 @@ def compute_metrics(
     return StrategyMetrics(
         total_return=total_return(equity_curve),
         annualized_return=annualized_return(equity_curve),
-        sharpe_ratio=sharpe_ratio(equity_curve),
+        sharpe_ratio=sharpe_ratio(equity_curve, periods_per_year=periods_per_year),
         max_drawdown=max_drawdown(equity_curve),
         hit_rate=hit_rate(closed_trades),
         excess_return_vs_spy=excess,

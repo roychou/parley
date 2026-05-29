@@ -28,7 +28,7 @@ from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from src.backtest.backtest_supervisor import run_backtest_supervisor
-from src.backtest.cache import DecisionCache, make_cached_provider
+from src.backtest.cache import SignalCache
 from src.backtest.metrics import StrategyMetrics, compute_metrics
 from src.backtest.replay import BacktestConfig, BacktestResult, run_backtest
 from src.backtest.strategies import MultiAgentStrategy, SPYHoldStrategy
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # weekly Fridays. Dates stop before "today" so FMP has posted the EOD close.
 DEFAULT_TICKERS = ["NVDA", "MSFT", "GOOGL"]
 DEFAULT_DATES = ["2026-04-24", "2026-05-01", "2026-05-08", "2026-05-15", "2026-05-22"]
-DECISION_CACHE_DIR = Path("data/cache/decisions")
+SIGNAL_CACHE_DIR = Path("data/cache/signals")
 
 
 # ==========================================
@@ -57,15 +57,14 @@ DECISION_CACHE_DIR = Path("data/cache/decisions")
 
 
 def build_strategies(client: AsyncAnthropic, cache_version: str):
-    """Compose the real cached supervisor into the multi-agent strategy.
+    """Compose the real signal-cached supervisor into the multi-agent strategy.
 
     SPYHold rides along as the market benchmark — it also exercises the
     deterministic (non-LLM) strategy path end-to-end.
     """
-    cache = DecisionCache(DECISION_CACHE_DIR, version=cache_version)
-    # partial binds the client -> (ticker, as_of) -> Awaitable[Decision]
-    supervisor_fn = partial(run_backtest_supervisor, client)
-    provider = make_cached_provider(supervisor_fn, cache)
+    signal_cache = SignalCache(SIGNAL_CACHE_DIR, default_version=cache_version)
+    # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
+    provider = partial(run_backtest_supervisor, client, signal_cache=signal_cache)
     return [MultiAgentStrategy(decision_provider=provider), SPYHoldStrategy()]
 
 
@@ -76,9 +75,11 @@ async def run(tickers: list[str], dates: list[str], cache_version: str) -> Backt
         decision_dates=sorted(dates),
         strategies=build_strategies(client, cache_version),
     )
+    # 5y depth: a 6-month window plus indicator lookback (e.g. SMA/RSI trailing
+    # windows) reaches back well past a 1y price history on the earliest dates.
     return await run_backtest(
         config,
-        price_loader=get_prices,
+        price_loader=partial(get_prices, period="5y"),
         fundamentals_loader=get_fundamentals_as_of,
     )
 
@@ -110,6 +111,7 @@ def print_summary(result: BacktestResult) -> None:
             outcome.portfolio.equity_curve,
             outcome.portfolio.closed_trades,
             spy_equity_curve=None if name == "spy_hold" else spy_curve,
+            periods_per_year=result.config.periods_per_year,
         )
         print(
             f"{name:<14}{_fmt_pct(m.total_return):>9}{m.sharpe_ratio:>9.2f}"

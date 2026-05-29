@@ -1,133 +1,138 @@
 import pytest
 
-from src.backtest.cache import DecisionCache, make_cached_provider
-from src.schemas import Decision
+from src.backtest.cache import SignalCache, cached_signal
 from src.schemas.fundamentals import FundamentalsAnalysis
 
 
-def _decision(ticker: str, direction: str = "BUY", confidence: float = 0.7) -> Decision:
-    signal = FundamentalsAnalysis(
+def _signal(ticker: str, signal: str = "BULLISH", confidence: float = 0.7) -> FundamentalsAnalysis:
+    return FundamentalsAnalysis(
         specialist="fundamentals",
         ticker=ticker,
-        signal="BULLISH",
+        signal=signal,
         confidence=confidence,
-        reasoning="Synthetic reasoning padded to satisfy the min_length=50 constraint on SpecialistSignal.",
+        reasoning="Synthetic reasoning padded to satisfy the min_length=50 constraint.",
         as_of="2026-01-09",
         rev_growth_yoy=0.12,
         pe_ratio=18.0,
         profit_margin=0.22,
         debt_to_equity=0.4,
     )
-    return Decision(
-        ticker=ticker,
-        direction=direction,
-        confidence=confidence,
-        rationale="Synthetic rationale padded to satisfy the min_length=50 constraint on Decision.",
-        contributing_signals=[signal],
-        as_of="2026-01-09",
-    )
 
 
 # ==========================================
-# DECISION CACHE
+# SIGNAL CACHE
 # ==========================================
 
 
 def test_cache_miss_returns_none(tmp_path):
-    cache = DecisionCache(tmp_path)
-    assert cache.get("AAPL", "2026-01-09") is None
+    cache = SignalCache(tmp_path)
+    assert cache.get("fundamentals", "AAPL", "2025-07-30_pe-fair", FundamentalsAnalysis) is None
 
 
 def test_cache_set_and_get_round_trip(tmp_path):
-    cache = DecisionCache(tmp_path)
-    original = _decision("AAPL", "BUY", 0.85)
+    cache = SignalCache(tmp_path)
+    original = _signal("AAPL", "BULLISH", 0.85)
 
-    cache.set("AAPL", "2026-01-09", original)
-    retrieved = cache.get("AAPL", "2026-01-09")
+    cache.set("fundamentals", "AAPL", "2025-07-30_pe-fair", original)
+    retrieved = cache.get("fundamentals", "AAPL", "2025-07-30_pe-fair", FundamentalsAnalysis)
 
     assert retrieved is not None
     assert retrieved.ticker == "AAPL"
-    assert retrieved.direction == "BUY"
+    assert retrieved.signal == "BULLISH"
     assert retrieved.confidence == pytest.approx(0.85)
-    assert retrieved.rationale == original.rationale
+    assert retrieved.reasoning == original.reasoning
 
 
-def test_cache_isolates_by_version(tmp_path):
-    cache_v1 = DecisionCache(tmp_path, version="v1")
-    cache_v2 = DecisionCache(tmp_path, version="v2")
+def test_cache_isolates_by_data_version(tmp_path):
+    """Different data_version (e.g. P/E crossed a band) is a different key."""
+    cache = SignalCache(tmp_path)
+    cache.set("fundamentals", "AAPL", "2025-07-30_pe-fair", _signal("AAPL"))
 
-    cache_v1.set("AAPL", "2026-01-09", _decision("AAPL", "BUY"))
-
-    # v2 cache is empty even though v1 wrote to the same root
-    assert cache_v2.get("AAPL", "2026-01-09") is None
-    # v1 entry persists
-    assert cache_v1.get("AAPL", "2026-01-09") is not None
+    assert cache.get("fundamentals", "AAPL", "2025-07-30_pe-high", FundamentalsAnalysis) is None
+    assert cache.get("fundamentals", "AAPL", "2025-07-30_pe-fair", FundamentalsAnalysis) is not None
 
 
-def test_cache_writes_to_correct_path(tmp_path):
-    cache = DecisionCache(tmp_path, version="v3")
-    cache.set("MSFT", "2026-02-13", _decision("MSFT"))
+def test_cache_isolates_by_kind(tmp_path):
+    """The same ticker/version under a different kind is a separate entry."""
+    cache = SignalCache(tmp_path)
+    cache.set("fundamentals", "AAPL", "k", _signal("AAPL"))
+    assert cache.get("technicals", "AAPL", "k", FundamentalsAnalysis) is None
 
-    expected = tmp_path / "v3" / "MSFT_2026-02-13.json"
+
+def test_per_kind_version_isolation(tmp_path):
+    """Bumping one specialist's version leaves the other specialist's cache warm."""
+    cache_a = SignalCache(tmp_path, versions={"fundamentals": "v1", "technicals": "v1"})
+    cache_a.set("fundamentals", "AAPL", "k", _signal("AAPL"))
+    cache_a.set("technicals", "AAPL", "k", _signal("AAPL"))
+
+    # Bump only technicals to v2; fundamentals stays v1.
+    cache_b = SignalCache(tmp_path, versions={"fundamentals": "v1", "technicals": "v2"})
+    assert cache_b.get("fundamentals", "AAPL", "k", FundamentalsAnalysis) is not None  # warm
+    assert cache_b.get("technicals", "AAPL", "k", FundamentalsAnalysis) is None  # invalidated
+
+
+def test_cache_writes_to_kind_version_path(tmp_path):
+    cache = SignalCache(tmp_path, default_version="v3")
+    cache.set("fundamentals", "MSFT", "2026-02-13_pe-low", _signal("MSFT"))
+
+    expected = tmp_path / "fundamentals" / "v3" / "MSFT_2026-02-13_pe-low.json"
     assert expected.exists()
 
 
 def test_cache_corrupt_file_returns_none(tmp_path):
-    cache = DecisionCache(tmp_path)
-    path = tmp_path / "v1" / "AAPL_2026-01-09.json"
+    cache = SignalCache(tmp_path)
+    path = tmp_path / "fundamentals" / "v1" / "AAPL_k.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("not valid json {{{")
 
-    assert cache.get("AAPL", "2026-01-09") is None
+    assert cache.get("fundamentals", "AAPL", "k", FundamentalsAnalysis) is None
 
 
 # ==========================================
-# CACHED PROVIDER
+# cached_signal
 # ==========================================
 
 
 @pytest.mark.asyncio
-async def test_cached_provider_calls_supervisor_on_miss(tmp_path):
-    cache = DecisionCache(tmp_path)
+async def test_cached_signal_computes_on_miss(tmp_path):
+    cache = SignalCache(tmp_path)
     calls = []
 
-    async def supervisor(ticker, date):
-        calls.append((ticker, date))
-        return _decision(ticker, "BUY", 0.6)
+    async def compute():
+        calls.append(1)
+        return _signal("AAPL")
 
-    provider = make_cached_provider(supervisor, cache)
-    decision = await provider("AAPL", "2026-01-09")
+    result = await cached_signal(cache, "fundamentals", "AAPL", "k", FundamentalsAnalysis, compute)
 
-    assert decision.ticker == "AAPL"
-    assert calls == [("AAPL", "2026-01-09")]
+    assert result.ticker == "AAPL"
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_cached_provider_hits_cache_on_second_call(tmp_path):
-    cache = DecisionCache(tmp_path)
+async def test_cached_signal_hits_cache_on_second_call(tmp_path):
+    cache = SignalCache(tmp_path)
     calls = []
 
-    async def supervisor(ticker, date):
-        calls.append((ticker, date))
-        return _decision(ticker, "BUY", 0.6)
+    async def compute():
+        calls.append(1)
+        return _signal("AAPL")
 
-    provider = make_cached_provider(supervisor, cache)
-    await provider("AAPL", "2026-01-09")
-    await provider("AAPL", "2026-01-09")
+    await cached_signal(cache, "fundamentals", "AAPL", "k", FundamentalsAnalysis, compute)
+    await cached_signal(cache, "fundamentals", "AAPL", "k", FundamentalsAnalysis, compute)
 
-    # Supervisor called exactly once; second call hit the cache
-    assert calls == [("AAPL", "2026-01-09")]
+    # Computed exactly once; the second call hit the cache.
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_cached_provider_preserves_decision_identity(tmp_path):
-    cache = DecisionCache(tmp_path)
+async def test_cached_signal_none_cache_always_computes(tmp_path):
+    calls = []
 
-    async def supervisor(ticker, date):
-        return _decision(ticker, "SELL", 0.42)
+    async def compute():
+        calls.append(1)
+        return _signal("AAPL")
 
-    provider = make_cached_provider(supervisor, cache)
-    first = await provider("AAPL", "2026-01-09")
-    second = await provider("AAPL", "2026-01-09")
+    await cached_signal(None, "fundamentals", "AAPL", "k", FundamentalsAnalysis, compute)
+    await cached_signal(None, "fundamentals", "AAPL", "k", FundamentalsAnalysis, compute)
 
-    assert first.direction == second.direction == "SELL"
-    assert first.confidence == second.confidence == pytest.approx(0.42)
+    assert len(calls) == 2

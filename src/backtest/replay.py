@@ -2,8 +2,15 @@
 Backtest replay loop.
 
 `run_backtest(config, price_loader, fundamentals_loader) -> BacktestResult`
-iterates decision dates × strategies, executing each strategy independently
+iterates trading days × strategies, executing each strategy independently
 against its own Portfolio.
+
+Decoupled cadences: strategies (re)decide only on `config.decision_dates`
+(expensive, LLM-driven), while mark-to-market — stop-loss + equity snapshot —
+runs on every trading day in the window (cheap, and risk must be checked
+tightly). This means the equity curve is sampled daily, so Sharpe annualizes
+with `config.periods_per_year` (252), not weekly. When the price data contains
+only the decision dates, the two cadences coincide and behaviour is unchanged.
 
 Two sequencing invariants worth being explicit about:
 
@@ -42,11 +49,12 @@ FundamentalsLoader = Callable[[str, str], ValuationSnapshot | None]  # (ticker, 
 @dataclass(frozen=True)
 class BacktestConfig:
     universe: list[str]
-    decision_dates: list[str]   # sorted, YYYY-MM-DD strings
+    decision_dates: list[str]   # sorted, YYYY-MM-DD strings — when strategies (re)decide
     strategies: list[Strategy]
     initial_cash: float = 100_000.0
     stop_loss_pct: float | None = -0.20
     extra_tickers: list[str] = field(default_factory=lambda: ["SPY"])  # baseline tickers outside the universe
+    periods_per_year: int = 252  # daily equity curve (per MTM); Sharpe annualized daily
 
 
 @dataclass
@@ -102,24 +110,44 @@ async def run_backtest(
         for s in config.strategies
     }
 
-    for date in config.decision_dates:
-        prices_at_date = _prices_at(price_history, date)
+    # Decoupled cadences: strategies (re)decide only on decision_dates (expensive,
+    # LLM-driven), but mark-to-market — stop-loss checks + equity snapshots — runs
+    # every trading day in the window (cheap, and risk must be tight). The trading
+    # calendar is the union of every ticker's price dates within the decision window.
+    decision_set = set(config.decision_dates)
+    window_start, window_end = config.decision_dates[0], config.decision_dates[-1]
+    trading_days = sorted({
+        d
+        for history in price_history.values()
+        for d in history
+        if window_start <= d <= window_end
+    })
+    if not trading_days:
+        raise ValueError("no price data within the decision window")
 
-        # Per-ticker fundamentals available at this date
+    for date in trading_days:
+        prices_at_date = _prices_at(price_history, date)
+        is_decision_day = date in decision_set
+
+        # Fundamentals are only consumed when strategies decide.
         fundamentals_at_date: dict[str, ValuationSnapshot] = {}
-        for ticker in config.universe:
-            snap = fundamentals_loader(ticker, date)
-            if snap is not None:
-                fundamentals_at_date[ticker] = snap
+        if is_decision_day:
+            for ticker in config.universe:
+                snap = fundamentals_loader(ticker, date)
+                if snap is not None:
+                    fundamentals_at_date[ticker] = snap
 
         for strategy in config.strategies:
             outcome = outcomes[strategy.name]
             portfolio = outcome.portfolio
 
-            # 1. Mark-to-market (applies stop-loss + snapshots equity curve)
+            # 1. Mark-to-market every trading day (applies stop-loss + snapshots equity).
             portfolio.mark_to_market(prices_at_date, date, stop_loss_pct=config.stop_loss_pct)
 
-            # 2. Strategy decides
+            # 2. Decide only on decision days.
+            if not is_decision_day:
+                continue
+
             actions = await strategy.decide_all(
                 universe=config.universe,
                 date=date,
@@ -144,8 +172,8 @@ async def run_backtest(
             _execute_actions(closes, portfolio, prices_at_date, date, portfolio_value_for_sizing)
             _execute_actions(opens, portfolio, prices_at_date, date, portfolio_value_for_sizing)
 
-    # End-of-backtest: close all remaining positions at final-date prices
-    final_date = config.decision_dates[-1]
+    # End-of-backtest: close all remaining positions at the final trading day's prices
+    final_date = trading_days[-1]
     final_prices = _prices_at(price_history, final_date)
     for outcome in outcomes.values():
         outcome.portfolio.close_all(final_prices, final_date)
