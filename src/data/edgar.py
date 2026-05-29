@@ -119,6 +119,32 @@ def ticker_to_cik(ticker: str) -> str:
 # ==========================================
 
 
+def recent_filing_dates(ticker: str, forms: tuple[str, ...] = ("10-Q", "10-K")) -> list[str]:
+    """Sorted filing dates (YYYY-MM-DD) for the given forms, from the lean submissions API.
+
+    Used by the event-driven candidate screen ("did this name just file?"). The
+    submissions endpoint is far cheaper than companyfacts — one small call per
+    ticker — so the screen runs over the whole universe without pulling full
+    financials for names that won't be analyzed.
+    """
+    cik = ticker_to_cik(ticker)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    today = date.today().strftime("%Y%m%d")
+    cache_path = CACHE_DIR / f"{ticker.upper()}_submissions_{today}.json"
+    if cache_path.exists():
+        data = json.loads(cache_path.read_text())
+    else:
+        data = _get(f"{SEC_DATA_BASE}/submissions/CIK{cik}.json")
+        cache_path.write_text(json.dumps(data))
+    recent = data.get("filings", {}).get("recent", {})
+    out = [
+        fd
+        for form, fd in zip(recent.get("form", []), recent.get("filingDate", []))
+        if form in forms
+    ]
+    return sorted(out)
+
+
 def fetch_company_facts(ticker: str) -> dict:
     """Fetch (and cache) the full XBRL company-facts blob for a ticker."""
     cik = ticker_to_cik(ticker)

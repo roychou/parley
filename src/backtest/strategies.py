@@ -18,9 +18,12 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass
+from datetime import date as _date
+from datetime import timedelta
 from typing import Awaitable, Callable, Literal, Protocol
 
 from src.backtest.portfolio import Portfolio
+from src.backtest.screen import FilingDatesFn, select_candidates
 from src.data.fundamentals import ValuationSnapshot
 from src.schemas import Decision
 
@@ -130,12 +133,34 @@ class MultiAgentStrategy:
         base_pct: float = 0.10,
         floor: float = 0.02,
         cap: float = 0.15,
+        filing_dates_fn: FilingDatesFn | None = None,
+        screen_lookback_days: int = 100,
     ):
         self.decision_provider = decision_provider
         self.base_pct = base_pct
         self.floor = floor
         self.cap = cap
+        # Event-driven screen: when filing_dates_fn is provided, only analyze names
+        # that filed since the last decision (plus current holdings). None -> analyze
+        # the whole universe given (backward compatible).
+        self.filing_dates_fn = filing_dates_fn
+        self.screen_lookback_days = screen_lookback_days
+        self._last_decision_date: str | None = None
         self.last_decisions: list[Decision] = []
+
+    def _screen(self, universe: list[str], date: str, portfolio: Portfolio) -> list[str]:
+        if self._last_decision_date is not None:
+            window_start = self._last_decision_date
+        else:
+            y, m, d = map(int, date.split("-"))
+            window_start = (_date(y, m, d) - timedelta(days=self.screen_lookback_days)).isoformat()
+        return select_candidates(
+            eligible=universe,
+            held=list(portfolio.positions),
+            window_start=window_start,
+            window_end=date,
+            filing_dates_fn=self.filing_dates_fn,
+        )
 
     async def decide_all(
         self,
@@ -146,6 +171,9 @@ class MultiAgentStrategy:
         portfolio: Portfolio,
     ) -> list[Action]:
         import asyncio
+        if self.filing_dates_fn is not None:
+            universe = self._screen(universe, date, portfolio)
+            self._last_decision_date = date
         decisions = await asyncio.gather(
             *[self.decision_provider(ticker, date) for ticker in universe]
         )
