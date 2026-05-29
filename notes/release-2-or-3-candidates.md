@@ -39,12 +39,42 @@ Items that don't belong in Release 1 scope but should not be lost. Each entry ha
 
 ---
 
+## Universe construction (Release 2) — see `notes/universe-design.md`
+
+Today `universe` is a static `list[str]` that conflates three jobs (eligibility,
+candidate selection, analysis) into "15 curated names" — which bakes Roy's
+stock-picking into the result and is survivorship-contaminated for backtests.
+
+**Decision:** eligibility = **point-in-time S&P 500 membership**, sourced from a free
+historical-constituents CSV (FMP's constituent endpoints are 402/restricted on the
+current tier; verified 2026-05-29). Live mode needs only the *current* list (free) —
+survivorship only affects backtests. Universe becomes a `universe_loader(date)`,
+mirroring the price/fundamentals loaders.
+
+**Candidate screen (stage ②) = event-driven selection (decided).** A name becomes a
+candidate when it has a **fresh quarterly filing** that period — a trigger, not a
+ranker, so it imposes no style lean and rotates attention across the whole index over
+the reporting cycle (~38/week, self-pacing). Avoids double-counting the specialists,
+is direction-neutral, and is the natural feed for the sentiment specialist. Held names
+are always re-analyzed (`decision universe = holdings ∪ candidates`). ~500 tickers of
+data hits the 250/day FMP cap (S&P 100 is a pragmatic middle).
+
+**Prerequisite — quarterly-filings upgrade (committed):** move fundamentals from annual
+to FMP `period=quarter`. Gives 4× event cadence and fixes the "up to 15 months stale"
+limitation. Touches `calc_growth_yoy` (same-quarter-prior-year YoY), the fundamentals
+prompt, and needs eval re-calibration.
+
+**Deferred to the sentiment specialist:** a price-move trigger ("market moved on news")
+belongs in sentiment, not the screen.
+
+Full rationale, data caveats, and integration plan in `notes/universe-design.md`.
+
 ## Backtest enhancements (Release 2)
 
 These are explicitly listed as Release 1 limitations in `notes/backtest-design.md` and should be addressed when Release 2 expands the backtest.
 
 - **Transaction cost modeling** — add round-trip cost assumption (e.g., 10 bps per round-trip on US large-caps) to all strategy P&L calculations.
 - **Dividend reinvestment** — FMP exposes dividend data; reinvest at the ex-date close.
-- **Survivorship bias** — extend the universe to include delisted tickers from the backtest window.
+- **Survivorship bias** — addressed by the point-in-time S&P 500 universe above (`notes/universe-design.md`), which also lets baselines pick from the full index rather than the curated 15.
 - **Confidence calibration** — use Release 1 backtest results to recalibrate the confidence-to-position-size mapping. The current mapping is mechanical; the data exists post-Release-1 to make it empirical.
 - **LLM-driven synthesis** — replace `synthesize()` in `src/synthesis.py` with an LLM supervisor. The synthesis grounding eval is designed to survive this transition.
