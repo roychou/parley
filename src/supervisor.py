@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from datetime import date
@@ -27,11 +27,9 @@ async def run_supervisor(ticker: str, as_of: str | None = None) -> Decision:
     as_of defaults to today. In backtest mode, pass the historical date.
     """
     as_of = as_of or date.today().isoformat()
-    # async def run_fundamentals_specialist(ticker: str, client: Anthropic) -> FundamentalsAnalysis:
 
-    # Instantiate the client at the top level
     try:
-        client = Anthropic()
+        client = AsyncAnthropic()
     except Exception as e:
         logger.error(f"Failed to initialize Anthropic client: {e}")
         sys.exit(1)
@@ -45,7 +43,5 @@ async def run_supervisor(ticker: str, as_of: str | None = None) -> Decision:
 
 
 if __name__ == "__main__":
-    import asyncio
-
     decision = asyncio.run(run_supervisor("NVDA"))
     print(decision.model_dump_json(indent=2))

@@ -1,15 +1,14 @@
-"""Fetch end-of-day OHLCV data from yfinance and log to JSON."""
+"""Fetch end-of-day OHLCV data from FMP and log to JSON."""
 
 import json
 import logging
 import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import pandas as pd
-import yfinance as yf
+from src.data.fmp_client import get_historical_prices
 
 # ==========================================
 # 0. LOGGING & CONFIG
@@ -49,22 +48,23 @@ def parse_tickers(content: str) -> List[str]:
     return re.findall(r"^- \[([A-Z]{1,5})\]", content, flags=re.MULTILINE)
 
 
-def transform_history_df(df: pd.DataFrame) -> Dict[str, dict]:
-    """Pure function to map a yfinance DataFrame to our JSON-ready dictionary format."""
-    records = {}
-    for date, row in df.iterrows():
-        date_str = date.strftime("%Y-%m-%d")
+def transform_history_records(records: List[dict]) -> Dict[str, dict]:
+    """Pure function to map FMP's historical price list to our keyed dict format.
 
-        row_data = OHLCV(
-            open=round(float(row["Open"]), 2),
-            high=round(float(row["High"]), 2),
-            low=round(float(row["Low"]), 2),
-            close=round(float(row["Close"]), 2),
-            volume=int(row["Volume"]),
-        )
-        records[date_str] = asdict(row_data)
-
-    return records
+    FMP returns a list of {date, open, high, low, close, adjClose, volume, ...} dicts
+    ordered most-recent first. We key by date string for fast lookup.
+    """
+    out: Dict[str, dict] = {}
+    for row in records:
+        date_str = row["date"]  # FMP already formats as "YYYY-MM-DD"
+        out[date_str] = asdict(OHLCV(
+            open=round(float(row["open"]), 2),
+            high=round(float(row["high"]), 2),
+            low=round(float(row["low"]), 2),
+            close=round(float(row["close"]), 2),
+            volume=int(row["volume"]),
+        ))
+    return out
 
 
 # ==========================================
@@ -81,13 +81,19 @@ def read_universe_file(filepath: Path) -> str:
         return f.read()
 
 
-def fetch_raw_history(ticker: str, period: str = "1y") -> pd.DataFrame:
-    """Fetches raw history from Yahoo Finance."""
-    t = yf.Ticker(ticker)
-    df = t.history(period=period)
-    if df.empty:
+def fetch_raw_history(ticker: str, period: str = "1y") -> List[dict]:
+    """Fetches raw history from FMP, bounded to the last `period` window.
+
+    Accepts "1y" or "5y" (FMP free tier provides up to 5 years of daily history).
+    """
+    today = datetime.now().date()
+    years = 5 if period == "5y" else 1
+    from_date = (today - timedelta(days=365 * years)).isoformat()
+    to_date = today.isoformat()
+    records = get_historical_prices(ticker, from_date=from_date, to_date=to_date)
+    if not records:
         raise ValueError(f"No data returned for {ticker}")
-    return df
+    return records
 
 
 def save_prices_to_cache(ticker: str, data: Dict[str, dict]) -> None:
@@ -125,8 +131,8 @@ def load_latest_cache(ticker: str) -> Optional[Dict[str, dict]]:
 def process_ticker(ticker: str, period: str = "1y") -> Dict[str, dict]:
     """Pipeline to forcibly Fetch -> Transform -> Cache."""
     logger.info(f"Fetching fresh data for {ticker}...")
-    df = fetch_raw_history(ticker, period)
-    records = transform_history_df(df)
+    raw = fetch_raw_history(ticker, period)
+    records = transform_history_records(raw)
     save_prices_to_cache(ticker, records)
     return records
 

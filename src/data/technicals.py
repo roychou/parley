@@ -84,3 +84,37 @@ def process_ticker(ticker: str) -> TechnicalsSnapshot:
         sma_20=float(sma_20_val),
         rsi_14=float(rsi_14_val),
     )
+
+
+def get_technicals_as_of(ticker: str, as_of_date: str, sma_window: int = 20, rsi_window: int = 14) -> TechnicalsSnapshot | None:
+    """Point-in-time technicals snapshot computed from prices up to and including `as_of_date`.
+
+    Returns None if insufficient history (need at least sma_window data points
+    available on or before as_of_date).
+    """
+    raw_data = get_prices(ticker)
+    df = pd.DataFrame.from_dict(raw_data, orient="index")
+    df.sort_index(inplace=True)
+
+    # Filter to dates <= as_of_date (point-in-time discipline)
+    df = df.loc[df.index <= as_of_date]
+    if len(df) < sma_window:
+        return None
+
+    closes = df["close"]
+    sma_val = sma(closes, window=sma_window).dropna()
+    rsi_val = rsi(closes, window=rsi_window).dropna()
+
+    if sma_val.empty or rsi_val.empty:
+        return None
+
+    return TechnicalsSnapshot(
+        as_of=str(df.index[-1]),
+        date_range={
+            "start": str(df.index[0]),
+            "end": str(df.index[-1]),
+        },
+        current_price=float(closes.iloc[-1]),
+        sma_20=float(sma_val.iloc[-1]),
+        rsi_14=float(rsi_val.iloc[-1]),
+    )

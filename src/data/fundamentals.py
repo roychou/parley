@@ -1,17 +1,13 @@
 import json
 import logging
-import re
-import sys
+import math
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Optional
 
-import pandas as pd
-import yfinance as yf
-
-# IMPORT FIX: Grab the fault-tolerant price function
 from src.data.fetch_prices import get_latest_close
+from src.data.fmp_client import FMPError, get_balance_sheet, get_income_statement
 
 # --- Logging & Config ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -24,8 +20,15 @@ UNIVERSE_FILE = Path("notes/universe.md")
 # --- Immutable Data Model ---
 @dataclass(frozen=True)
 class ValuationSnapshot:
+    """Point-in-time-anchored fundamentals snapshot.
+
+    report_date semantics: the actual SEC filing date (FMP `acceptedDate`).
+    Backtests must use this — not period_end_date — as the availability anchor,
+    since the data was not actually published until report_date.
+    """
     price_date: str
-    report_date: str
+    report_date: str         # filing date (when data became publicly available)
+    period_end_date: str     # fiscal period-end date the filing covers
     diluted_eps: float
     profit_margin: float
     rev_growth_yoy: float
@@ -38,38 +41,41 @@ class ValuationSnapshot:
 # ==========================================
 
 
+def _is_nan(x: Any) -> bool:
+    return x is None or (isinstance(x, float) and math.isnan(x))
+
+
 def calc_pe(price: float, eps: float) -> float:
-    if pd.isna(eps) or eps <= 0 or pd.isna(price):
+    if _is_nan(eps) or _is_nan(price) or eps <= 0:
         return float("nan")
     return float(price / eps)
 
 
 def calc_margin(net_income: float, revenue: float) -> float:
-    if pd.isna(revenue) or revenue == 0:
+    if _is_nan(revenue) or revenue == 0:
         return float("nan")
     return float(net_income / revenue)
 
 
 def calc_growth_yoy(current: float, previous: float) -> float:
-    if pd.isna(previous) or previous == 0:
+    if _is_nan(previous) or previous == 0:
         return float("nan")
     return float((current - previous) / previous)
 
 
 def calc_debt_equity(debt: float, equity: float) -> float:
-    if pd.isna(equity) or equity == 0:
+    if _is_nan(equity) or equity == 0:
         return float("nan")
     return float(debt / equity)
 
 
-def safe_get_metric(df: pd.DataFrame, index_name: str, col_idx: int = 0) -> float:
-    """Pure helper to safely extract a metric from a DataFrame."""
-    try:
-        if index_name in df.index:
-            val = df.loc[index_name].iloc[col_idx]
-            return float(val) if pd.notna(val) else float("nan")
+def _safe_float(value: Any) -> float:
+    """Coerce FMP-returned values to float, defaulting to NaN for missing/invalid."""
+    if value is None:
         return float("nan")
-    except (IndexError, KeyError):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
         return float("nan")
 
 
@@ -78,29 +84,169 @@ def safe_get_metric(df: pd.DataFrame, index_name: str, col_idx: int = 0) -> floa
 # ==========================================
 
 
-def fetch_yfinance_raw_fundamentals(ticker: str) -> dict:
-    """Fetches data from Yahoo Finance and returns a raw dictionary."""
-    t = yf.Ticker(ticker)
-    financials = t.financials
-    balance_sheet = t.balance_sheet
+def fetch_fmp_raw_fundamentals(ticker: str) -> dict:
+    """Fetches data from FMP and returns a raw dictionary.
 
-    if financials.empty or balance_sheet.empty:
-        raise ValueError(f"No financial data returned for {ticker}")
+    Uses the most recent annual filing. Returns both `report_date` (actual
+    filing date, FMP `acceptedDate`) and `period_end_date` (fiscal period close).
+    """
+    income = get_income_statement(ticker, limit=2)
+    balance = get_balance_sheet(ticker, limit=1)
 
-    diluted_eps = safe_get_metric(financials, "Diluted EPS", 0)
-    net_income = safe_get_metric(financials, "Net Income", 0)
-    curr_revenue = safe_get_metric(financials, "Total Revenue", 0)
-    prev_revenue = safe_get_metric(financials, "Total Revenue", 1)
-    total_debt = safe_get_metric(balance_sheet, "Total Debt", 0)
-    equity = safe_get_metric(balance_sheet, "Stockholders Equity", 0)
+    if len(income) < 2:
+        raise FMPError(
+            f"Need at least two annual income statements for {ticker} to compute YoY growth; got {len(income)}"
+        )
+
+    return _build_raw_from_filings(
+        latest_income=income[0],
+        prior_income=income[1],
+        latest_balance=balance[0],
+    )
+
+
+def fetch_fmp_all_filings_raw(ticker: str, limit: int = 5) -> list[dict]:
+    """Returns a list of point-in-time raw fundamentals dicts, most recent first.
+
+    Each entry has the same shape as `fetch_fmp_raw_fundamentals` returns, but
+    represents a single historical filing rather than just the latest. The list
+    contains up to N-1 entries when N income statements are available (the oldest
+    is used only as the YoY prior-revenue reference for the next-oldest filing).
+
+    `limit` is capped to 5 by FMP's free tier. Five annual filings cover a 4-year
+    backtest window (the oldest is the YoY-reference for the next-oldest).
+
+    Used by `get_fundamentals_as_of` for point-in-time backtest replay.
+    """
+    income = get_income_statement(ticker, limit=min(limit, 5))
+    balance = get_balance_sheet(ticker, limit=min(limit, 5))
+
+    if len(income) < 2:
+        raise FMPError(
+            f"Need at least two annual income statements for {ticker} to build a filing history; got {len(income)}"
+        )
+
+    balance_by_period = {b["date"]: b for b in balance}
+
+    out: list[dict] = []
+    for i in range(len(income) - 1):
+        latest_income = income[i]
+        prior_income = income[i + 1]
+        latest_balance = balance_by_period.get(latest_income["date"])
+        if latest_balance is None:
+            # No matching balance sheet for this period; skip
+            continue
+        out.append(_build_raw_from_filings(latest_income, prior_income, latest_balance))
+    return out
+
+
+def _build_raw_from_filings(latest_income: dict, prior_income: dict, latest_balance: dict) -> dict:
+    """Pure builder: combines paired FMP filing dicts into our raw fundamentals shape."""
+    # FMP returns acceptedDate as "YYYY-MM-DD HH:MM:SS"; strip to date.
+    # filingDate is a clean "YYYY-MM-DD" — prefer it if present.
+    filing = latest_income.get("filingDate") or latest_income.get("acceptedDate") or latest_income.get("date")
+    report_date = filing.split(" ")[0] if isinstance(filing, str) else filing
+
+    diluted_eps = _safe_float(latest_income.get("epsDiluted"))
+    net_income = _safe_float(latest_income.get("netIncome"))
+    curr_revenue = _safe_float(latest_income.get("revenue"))
+    prev_revenue = _safe_float(prior_income.get("revenue"))
+    total_debt = _safe_float(latest_balance.get("totalDebt"))
+    equity = _safe_float(latest_balance.get("totalStockholdersEquity"))
 
     return {
-        "report_date": financials.columns[0].strftime("%Y-%m-%d"),
+        "report_date": report_date,
+        "period_end_date": latest_income.get("date"),
         "diluted_eps": diluted_eps,
         "profit_margin": calc_margin(net_income, curr_revenue),
         "rev_growth_yoy": calc_growth_yoy(curr_revenue, prev_revenue),
         "debt_to_equity": calc_debt_equity(total_debt, equity),
     }
+
+
+# ==========================================
+# POINT-IN-TIME: filings history cache + as-of lookup
+# ==========================================
+
+
+FILINGS_CACHE_DIR = CACHE_DIR.parent / "filings_history"
+
+
+def _filings_cache_path(ticker: str) -> Path:
+    FILINGS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    today_str = datetime.now().strftime("%Y%m%d")
+    return FILINGS_CACHE_DIR / f"{ticker}_{today_str}.json"
+
+
+def _load_filings_cache(ticker: str) -> list[dict] | None:
+    FILINGS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    matches = sorted(FILINGS_CACHE_DIR.glob(f"{ticker}_*.json"))
+    if not matches:
+        return None
+    try:
+        with matches[-1].open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return None
+
+
+def _save_filings_cache(ticker: str, filings: list[dict]) -> None:
+    path = _filings_cache_path(ticker)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(filings, f, indent=2)
+
+
+def get_filings_history(ticker: str) -> list[dict]:
+    """Returns the full list of point-in-time raw filings for a ticker.
+
+    Uses an on-disk cache (keyed by ticker + today's date) so repeated calls
+    within the same day don't hit FMP. Cache files persist across days; the
+    most recent file is preferred.
+    """
+    cached = _load_filings_cache(ticker)
+    if cached is not None:
+        return cached
+    filings = fetch_fmp_all_filings_raw(ticker)
+    _save_filings_cache(ticker, filings)
+    return filings
+
+
+def get_fundamentals_as_of(ticker: str, as_of_date: str) -> Optional[ValuationSnapshot]:
+    """Returns the most recent filing available as of `as_of_date`, with P/E computed
+    using the close price on (or most recently before) `as_of_date`.
+
+    Returns None if no filing has report_date <= as_of_date, or if no price is available.
+    """
+    filings = get_filings_history(ticker)
+    eligible = [f for f in filings if f["report_date"] and f["report_date"] <= as_of_date]
+    if not eligible:
+        return None
+    latest = eligible[0]  # filings are most-recent first
+
+    # Get the close price at as_of_date (or the most recent available before it)
+    prices = _get_prices_dict(ticker)
+    eligible_price_dates = sorted(d for d in prices if d <= as_of_date)
+    if not eligible_price_dates:
+        return None
+    price_date = eligible_price_dates[-1]
+    price = float(prices[price_date]["close"])
+
+    return ValuationSnapshot(
+        price_date=price_date,
+        report_date=latest["report_date"],
+        period_end_date=latest["period_end_date"],
+        diluted_eps=latest["diluted_eps"],
+        profit_margin=latest["profit_margin"],
+        rev_growth_yoy=latest["rev_growth_yoy"],
+        debt_to_equity=latest["debt_to_equity"],
+        pe_ratio=calc_pe(price, latest["diluted_eps"]),
+    )
+
+
+def _get_prices_dict(ticker: str) -> dict:
+    """Import-late helper to avoid circular import with fetch_prices."""
+    from src.data.fetch_prices import get_prices
+    return get_prices(ticker)
 
 
 def save_snapshot_to_cache(ticker: str, snapshot: ValuationSnapshot) -> None:
@@ -140,18 +286,19 @@ def load_latest_cache(ticker: str) -> Optional[ValuationSnapshot]:
 
 def process_ticker(ticker: str) -> ValuationSnapshot:
     """Pipeline to forcefully Fetch -> Compute -> Cache -> Return."""
-    logger.info(f"Fetching fresh yfinance fundamentals for {ticker}...")
+    logger.info(f"Fetching fresh FMP fundamentals for {ticker}...")
 
     try:
         latest_price_date, current_price = get_latest_close(ticker)
     except Exception as e:
         raise RuntimeError(f"Cannot build snapshot. Failed to load prices for {ticker}: {e}")
 
-    raw_funds = fetch_yfinance_raw_fundamentals(ticker)
+    raw_funds = fetch_fmp_raw_fundamentals(ticker)
 
     snapshot = ValuationSnapshot(
         price_date=latest_price_date,
         report_date=raw_funds["report_date"],
+        period_end_date=raw_funds["period_end_date"],
         diluted_eps=raw_funds["diluted_eps"],
         profit_margin=raw_funds["profit_margin"],
         rev_growth_yoy=raw_funds["rev_growth_yoy"],
@@ -179,14 +326,6 @@ def get_fundamentals(ticker: str) -> ValuationSnapshot:
     return snapshot
 
 
-def load_snapshot_df(ticker: str) -> pd.DataFrame:
-    """Utility function: seamlessly fetches fault-tolerant data and returns a DataFrame."""
-    snapshot = get_fundamentals(ticker)  # Now completely immune to cache misses!
-    df = pd.DataFrame.from_dict({snapshot.price_date: asdict(snapshot)}, orient="index")
-    df.index = pd.to_datetime(df.index, format="%Y-%m-%d")
-    return df
-
-
 # ==========================================
 # 4. ORCHESTRATOR
 # ==========================================
@@ -195,12 +334,8 @@ def load_snapshot_df(ticker: str) -> pd.DataFrame:
 def main() -> None:
     ticker = "MSFT"
     try:
-        # Calling process_ticker explicitly forces a fresh API pull
-        process_ticker(ticker)
-
-        # Checking DataFrame transformation
-        df = load_snapshot_df(ticker)
-        logger.info(f"\n{df}")
+        snapshot = process_ticker(ticker)
+        logger.info(f"Snapshot for {ticker}: {snapshot}")
     except Exception as e:
         logger.error(f"Pipeline failed for {ticker}: {e}")
 
