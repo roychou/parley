@@ -69,6 +69,33 @@ belongs in sentiment, not the screen.
 
 Full rationale, data caveats, and integration plan in `notes/universe-design.md`.
 
+### Known limitation — survivorship coverage asymmetry (logged 2026-05-30)
+
+The grab surfaced an asymmetry between data dimensions for delisted names:
+- **Prices: survivorship-free** — FMP Premium serves delisted history (941/1,194
+  historical members covered; the rest are pre-2010 delistings FMP lacks).
+- **Fundamentals + filings: current members only** — EDGAR maps ticker→CIK via SEC's
+  `company_tickers.json`, which lists *current* filers, so delisted tickers (SIVB,
+  ACAS, FRC, …) don't resolve and get no EDGAR fundamentals/submissions.
+
+Consequence: price-only baselines (RSI, SPY) are fully survivorship-free, but the
+fundamentals-driven paths (multi-agent, P/E-ranking) effectively reach only current
+members on the fundamentals dimension; a holding that later delisted keeps prices
+(for MTM/exit) but loses fundamentals coverage afterward.
+
+**Solution (the gap is purely ticker→CIK).** EDGAR is keyed by **CIK**, which is
+permanent — a delisted company's 10-K/10-Q XBRL stays on EDGAR forever, and
+`companyfacts` by CIK returns it (XBRL ~2009+). So delisted fundamentals are
+*available*; we just can't map the old ticker to its CIK from the current SEC list.
+Fix: resolve delisted ticker→CIK from a source with delisted coverage —
+- **FMP** (we have Premium now): its profile/CIK endpoints cover delisted names, so
+  grab a `ticker→CIK` map for the full historical universe during the window, store
+  it, and have `edgar.ticker_to_cik` consult it for non-current tickers. Then the
+  existing EDGAR `companyfacts`-by-CIK path works for delisted (2009+), same
+  point-in-time pipeline.
+- Caveats: pre-2009 delistings still have no XBRL; recycled tickers (e.g. SBNY) need
+  CIK disambiguation by the membership date (which entity held the symbol then).
+
 ## Backtest enhancements (Release 2)
 
 These are explicitly listed as Release 1 limitations in `notes/backtest-design.md` and should be addressed when Release 2 expands the backtest.
