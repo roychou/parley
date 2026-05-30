@@ -90,6 +90,23 @@ def sp500_members_in_range(start_date: str, end_date: str) -> list[str]:
     return sorted(members)
 
 
+def membership_end(ticker: str) -> str | None:
+    """Latest membership end_date for `ticker` IF it is not a current member, else None.
+
+    Used to truncate a delisted name's price series: ticker symbols get recycled
+    after delisting (e.g. SBNY post-Signature), so a symbol-keyed price lookup can
+    return a *different company's* prices after the delisting date. Truncating at
+    the membership end keeps the series clean (and beyond it the name isn't eligible
+    anyway). Returns None for current members (their series is legitimately live).
+    """
+    spells = [(s, e) for t, s, e in _load_membership() if t == ticker.upper()]
+    if not spells:
+        return None
+    if any(end == _FUTURE for _, end in spells):
+        return None  # still a member
+    return max(end for _, end in spells)
+
+
 def current_sp500() -> list[str]:
     """Current S&P 500 membership (for live use), as of today."""
     return sp500_as_of(dt.date.today().isoformat())

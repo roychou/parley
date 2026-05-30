@@ -54,3 +54,14 @@ def test_members_in_range_excludes_non_overlapping(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     # 2008 window: only CCC's spell overlaps.
     assert universe.sp500_members_in_range("2008-06-01", "2008-12-31") == ["CCC"]
+
+
+def test_membership_end_truncation_date(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    # AAA re-entered with an open spell -> current member -> no truncation.
+    assert universe.membership_end("AAA") is None
+    assert universe.membership_end("BBB") is None  # open spell
+    # CCC left in 2009 and never returned -> truncate at its end date.
+    assert universe.membership_end("CCC") == "2009-01-01"
+    # Unknown ticker -> None.
+    assert universe.membership_end("ZZZ") is None

@@ -46,7 +46,7 @@ from src.backtest.strategies import (
 from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices
 from src.data.fundamentals import get_fundamentals_as_of
-from src.data.universe import sp500_as_of
+from src.data.universe import membership_end, sp500_as_of
 
 load_dotenv()
 
@@ -116,13 +116,27 @@ async def run(
         strategies=build_strategies(client, cache_version, filing_dates_fn, screen_lookback_days),
         universe_loader=universe_loader,
     )
-    # 5y depth: a 6-month window plus indicator lookback (e.g. SMA/RSI trailing
-    # windows) reaches back well past a 1y price history on the earliest dates.
+    # sp500 mode uses the deep ("max") grabbed history; watchlist uses 5y (a 6-month
+    # window + indicator lookback reaches past 1y on the earliest dates).
+    price_period = "max" if use_sp500 else "5y"
     return await run_backtest(
         config,
-        price_loader=partial(get_prices, period="5y"),
+        price_loader=_truncating_price_loader(price_period),
         fundamentals_loader=get_fundamentals_as_of,
     )
+
+
+def _truncating_price_loader(period: str):
+    """Price loader that truncates a delisted name's series at its membership end —
+    guards against recycled ticker symbols returning a different company's prices
+    after the delisting date (see universe.membership_end)."""
+    def loader(ticker: str) -> dict:
+        prices = get_prices(ticker, period=period)
+        end = membership_end(ticker)
+        if end is not None:
+            prices = {d: bar for d, bar in prices.items() if d <= end}
+        return prices
+    return loader
 
 
 # ==========================================
