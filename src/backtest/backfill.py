@@ -152,7 +152,7 @@ def main() -> None:
     parser.add_argument("--start", default=None, help="Window start; with --end seeds the union.")
     parser.add_argument("--end", default=None, help="Window end (use with --start).")
     parser.add_argument("--tickers", nargs="+", default=None, help="Explicit tickers.")
-    parser.add_argument("--price-period", default="5y", choices=["1y", "5y"])
+    parser.add_argument("--price-period", default="5y", help="1y/5y/30y/max (deep needs paid FMP).")
     parser.add_argument("--fmp-daily-cap", type=int, default=240)
     parser.add_argument("--skip-prices", action="store_true")
     parser.add_argument("--skip-fundamentals", action="store_true")

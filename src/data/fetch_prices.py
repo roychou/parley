@@ -81,13 +81,28 @@ def read_universe_file(filepath: Path) -> str:
         return f.read()
 
 
+def _period_years(period: str) -> int:
+    """Years of history for a period string: 'max' (~35y, all FMP Premium offers),
+    '<N>y' (e.g. '30y', '5y'), else 1. Cache keys include the period string, so
+    different depths namespace cleanly on disk."""
+    if period == "max":
+        return 35
+    if period.endswith("y"):
+        try:
+            return int(period[:-1])
+        except ValueError:
+            return 1
+    return 1
+
+
 def fetch_raw_history(ticker: str, period: str = "1y") -> List[dict]:
     """Fetches raw history from FMP, bounded to the last `period` window.
 
-    Accepts "1y" or "5y" (FMP free tier provides up to 5 years of daily history).
+    Accepts "1y", "5y", "30y", "max", etc. Deep history (>5y) needs a paid FMP
+    tier; the free tier serves ~5y and only for a limited symbol set.
     """
     today = datetime.now().date()
-    years = 5 if period == "5y" else 1
+    years = _period_years(period)
     from_date = (today - timedelta(days=365 * years)).isoformat()
     to_date = today.isoformat()
     records = get_historical_prices(ticker, from_date=from_date, to_date=to_date)

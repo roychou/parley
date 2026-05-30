@@ -20,11 +20,15 @@ It checks a few known-delisted S&P 500 names against `historical-price-eod/full`
 The live control (AAPL) should run to ~today. See the data-source discussion in
 notes/ for why this gate matters.
 """
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root on path
 load_dotenv()
 
-from src.data.fmp_client import FMPError, _get  # noqa: E402 (after load_dotenv)
+from src.data.fmp_client import FMPError, _get  # noqa: E402 (after path/dotenv setup)
 
 # Known delisted/dead US large-caps that were S&P 500 members (2022–2023):
 DELISTED = {
