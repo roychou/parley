@@ -25,6 +25,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 
 from dotenv import load_dotenv
 
@@ -163,8 +164,10 @@ def main() -> None:
 
     if args.tickers:
         tickers = args.tickers
-    elif args.start and args.end:
-        tickers = sp500_members_in_range(args.start, args.end)  # union over the window
+    elif args.start:
+        # union over [start, end]; end defaults to today so --start alone works
+        end = args.end or date.today().isoformat()
+        tickers = sp500_members_in_range(args.start, end)
     elif args.as_of:
         tickers = sp500_as_of(args.as_of)
     else:
