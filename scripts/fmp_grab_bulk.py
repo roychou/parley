@@ -28,8 +28,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root on path
-load_dotenv()
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))  # repo root on path
+load_dotenv(_ROOT / ".env")  # robust regardless of cwd
 
 from src.data.fmp_client import FMPError, get_bulk_csv  # noqa: E402
 
