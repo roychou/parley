@@ -69,6 +69,24 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any:
     return data
 
 
+def get_bulk_csv(path: str, params: dict[str, Any] | None = None) -> str:
+    """GET a bulk endpoint and return raw CSV text. FMP's `*-bulk` endpoints
+    (Premium) return CSV (all companies per period), not JSON. Raises FMPError on
+    non-200 (e.g. 402 if the endpoint isn't on the current tier)."""
+    params = dict(params or {})
+    params["apikey"] = _api_key()
+    url = f"{BASE_URL}/{path.lstrip('/')}"
+    try:
+        response = requests.get(url, params=params, timeout=TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        raise FMPError(f"FMP bulk request failed: {e}") from e
+    if response.status_code != 200:
+        raise FMPError(
+            f"FMP bulk returned {response.status_code} for {path}: {response.text[:200]}"
+        )
+    return response.text
+
+
 def get_income_statement(ticker: str, limit: int = 5) -> list[dict[str, Any]]:
     """Annual income statement, most recent first. Each entry includes acceptedDate (filing date)."""
     data = _get("income-statement", params={"symbol": ticker, "limit": limit})
