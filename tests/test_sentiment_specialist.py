@@ -88,3 +88,25 @@ async def test_run_returns_sentiment_analysis(monkeypatch):
 async def test_run_returns_none_when_no_filing(monkeypatch):
     monkeypatch.setattr(ss, "recent_filings", lambda t, *a, **k: [])
     assert await ss.run_sentiment_specialist(_FakeMessages(), "MSFT", "2026-05-01") is None
+
+
+@pytest.mark.asyncio
+async def test_summary_cache_reused_across_quarters(monkeypatch, tmp_path):
+    """A filing summarized once (as current) is reused next quarter (as prior),
+    so its map-reduce calls don't run again — the cost win."""
+    _patch_edgar(monkeypatch)
+    cache = ss.FilingSummaryCache(tmp_path)
+
+    # Q1 decision: current=A2, prior=A1 -> both summarized (scaffold runs for each).
+    mc1 = _FakeMessages()
+    await ss.run_sentiment_specialist(mc1, "MSFT", "2026-05-01", summary_cache=cache)
+    scaffold_calls_q1 = sum("tools" not in c for c in mc1.calls)
+    assert scaffold_calls_q1 == 2  # A2 + A1 summarized
+    assert cache.get("A2") is not None and cache.get("A1") is not None
+
+    # A later decision over the same filings: both summaries are cache hits, so the
+    # only LLM call is the synthesis (no scaffold summarization).
+    mc2 = _FakeMessages()
+    await ss.run_sentiment_specialist(mc2, "MSFT", "2026-05-10", summary_cache=cache)
+    assert sum("tools" not in c for c in mc2.calls) == 0  # no scaffold calls
+    assert sum("tools" in c for c in mc2.calls) == 1       # synthesis only

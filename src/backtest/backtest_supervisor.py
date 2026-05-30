@@ -33,7 +33,11 @@ from anthropic import AsyncAnthropic
 
 from src.agents.fundamentals_specialist import FUNDAMENTALS_ROLE_PROMPT
 from src.agents.scaffold import ScaffoldConfig
-from src.agents.sentiment_specialist import current_filing_key, run_sentiment_specialist
+from src.agents.sentiment_specialist import (
+    FilingSummaryCache,
+    current_filing_key,
+    run_sentiment_specialist,
+)
 from src.agents.technicals_specialist import TECHNICALS_ROLE_PROMPT
 from src.backtest.cache import SignalCache, cached_signal
 from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of, pe_band
@@ -75,6 +79,7 @@ async def run_backtest_supervisor(
     include_sentiment: bool = False,
     messages_api: MessageCreator | None = None,
     scaffold_config: ScaffoldConfig | None = None,
+    summary_cache: FilingSummaryCache | None = None,
 ) -> Decision:
     """Produce a Decision for (ticker, as_of) using point-in-time data and the real LLM.
 
@@ -124,7 +129,9 @@ async def run_backtest_supervisor(
         if sentiment_key:
             coros.append(cached_signal(
                 signal_cache, "sentiment", ticker, sentiment_key, SentimentAnalysis,
-                lambda: run_sentiment_specialist(mc, ticker, as_of, config=scaffold_config),
+                lambda: run_sentiment_specialist(
+                    mc, ticker, as_of, config=scaffold_config, summary_cache=summary_cache
+                ),
             ))
 
     signals = list(await asyncio.gather(*coros))

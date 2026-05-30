@@ -33,6 +33,7 @@ from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from src.agents.scaffold import ScaffoldConfig
+from src.agents.sentiment_specialist import FilingSummaryCache
 from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.batch import BatchLLM
 from src.backtest.cache import SignalCache
@@ -65,6 +66,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TICKERS = ["NVDA", "MSFT", "GOOGL"]
 DEFAULT_DATES = ["2026-04-24", "2026-05-01", "2026-05-08", "2026-05-15", "2026-05-22"]
 SIGNAL_CACHE_DIR = Path("data/cache/signals")
+SUMMARY_CACHE_DIR = Path("data/cache/filing_summaries")
 
 
 # ==========================================
@@ -102,6 +104,9 @@ def build_strategies(
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
     messages_api = BatchLLM(client) if use_batch else None
     scaffold_config = ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None
+    # Per-filing summary cache (keyed by accession) — reused across decision dates,
+    # quarters, and tickers, halving the sentiment scaffold's map-reduce cost.
+    summary_cache = FilingSummaryCache(SUMMARY_CACHE_DIR) if include_sentiment else None
     loader_kwargs = {}
     if fundamentals_loader is not None:
         loader_kwargs["fundamentals_loader"] = fundamentals_loader
@@ -111,6 +116,7 @@ def build_strategies(
         run_backtest_supervisor, client,
         signal_cache=signal_cache, include_sentiment=include_sentiment,
         messages_api=messages_api, scaffold_config=scaffold_config,
+        summary_cache=summary_cache,
         **loader_kwargs,
     )
     return [

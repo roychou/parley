@@ -13,7 +13,9 @@ notes/sentiment-specialist-design.md.
 """
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 from src.agents.scaffold import LLMCall, ScaffoldConfig, analyze_text
 from src.data.edgar import EdgarError, recent_filings
@@ -22,6 +24,43 @@ from src.llm import MessageCreator
 from src.schemas.sentiment import SentimentAnalysis
 
 logger = logging.getLogger(__name__)
+
+# Bump when the filing-summary prompts (_ANALYSIS_SYSTEM/_MAP_SYSTEM), the section
+# extractor, or the chunking change — old cached summaries then fall out of scope.
+SUMMARY_VERSION = "v1"
+
+
+class FilingSummaryCache:
+    """Disk cache for per-filing narrative summaries, keyed by SEC accession.
+
+    A filing's summary is a pure function of its (immutable) content and the
+    summarization prompts, so it's reusable forever and across tickers. The win:
+    the sentiment specialist summarizes the *prior* filing for change detection, so
+    without this each filing gets summarized ~twice over its life (once as the
+    current filing, once as the next quarter's prior). Caching by accession halves
+    that. None-safe like SignalCache (pass None to disable, e.g. in tests)."""
+
+    def __init__(self, root_dir: Path | str, version: str = SUMMARY_VERSION):
+        self.root = Path(root_dir)
+        self.version = version
+
+    def get(self, accession: str) -> str | None:
+        path = self._path(accession)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())["summary"]
+        except Exception as e:  # noqa: BLE001 — a corrupt cache file is just a miss
+            logger.warning(f"Filing-summary cache read failed for {accession}: {e}. Miss.")
+            return None
+
+    def set(self, accession: str, summary: str) -> None:
+        path = self._path(accession)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"accession": accession, "summary": summary}))
+
+    def _path(self, accession: str) -> Path:
+        return self.root / self.version / f"{accession}.json"
 
 ROOT_MODEL = "claude-sonnet-4-6"
 LEAF_MODEL = "claude-haiku-4-5-20251001"
@@ -104,18 +143,35 @@ def current_filing_key(ticker: str, as_of: str) -> str | None:
     return current["accession"] if current else None
 
 
-async def _filing_summary(llm: LLMCall, ticker: str, filing: dict, config: ScaffoldConfig) -> str:
+async def _filing_summary(
+    llm: LLMCall,
+    ticker: str,
+    filing: dict,
+    config: ScaffoldConfig,
+    summary_cache: FilingSummaryCache | None = None,
+) -> str:
     """Narrative summary of one filing. Uses extracted MD&A + Risk Factors when the
     best-effort extractor succeeds; otherwise falls back to the whole cleaned filing
-    (the scaffold map-reduces it). See edgar_filings.extract_sections."""
-    html = fetch_filing_document(ticker, filing["accession"], filing["primary_document"])
+    (the scaffold map-reduces it). See edgar_filings.extract_sections.
+
+    Cached by accession when summary_cache is provided — the map-reduce is the
+    expensive part, and the same filing is summarized again next quarter as 'prior'."""
+    accession = filing["accession"]
+    if summary_cache is not None:
+        hit = summary_cache.get(accession)
+        if hit is not None:
+            return hit
+    html = fetch_filing_document(ticker, accession, filing["primary_document"])
     text = clean_text(html)
     sections = extract_sections(text, filing["form"])
     parts = [s for s in (sections.get("mdna"), sections.get("risk_factors")) if s]
     content = "\n\n".join(parts) if parts else text  # fallback: whole filing
-    return await analyze_text(
+    summary = await analyze_text(
         content, analysis_system=_ANALYSIS_SYSTEM, map_system=_MAP_SYSTEM, llm=llm, config=config
     )
+    if summary_cache is not None:
+        summary_cache.set(accession, summary)
+    return summary
 
 
 async def run_sentiment_specialist(
@@ -123,20 +179,24 @@ async def run_sentiment_specialist(
     ticker: str,
     as_of: str,
     config: ScaffoldConfig | None = None,
+    summary_cache: FilingSummaryCache | None = None,
 ) -> SentimentAnalysis | None:
     """Produce a SentimentAnalysis for (ticker, as_of) from the filing narrative, or
     None if no filing is available as of the date (caller drops sentiment that period).
 
     messages_api is the injected LLM seam: client.messages on the live path, or a
-    BatchLLM on the batched path (which coalesces the scaffold's map fan-out)."""
+    BatchLLM on the batched path (which coalesces the scaffold's map fan-out).
+    summary_cache (optional) reuses per-filing summaries across quarters/tickers."""
     current, prior = _select_filings(ticker, as_of)
     if current is None:
         return None
     config = config or ScaffoldConfig(root_model=ROOT_MODEL, leaf_model=LEAF_MODEL)
     llm = _make_llm(messages_api)
 
-    current_summary = await _filing_summary(llm, ticker, current, config)
-    prior_summary = await _filing_summary(llm, ticker, prior, config) if prior else None
+    current_summary = await _filing_summary(llm, ticker, current, config, summary_cache)
+    prior_summary = (
+        await _filing_summary(llm, ticker, prior, config, summary_cache) if prior else None
+    )
 
     return await _synthesize_sentiment(
         messages_api, ticker, as_of, current, current_summary, prior_summary
