@@ -144,11 +144,18 @@ def get_fundamentals_as_of(
     """Returns the most recent filing available as of `as_of_date`, with P/E computed
     using the close price on (or most recently before) `as_of_date`.
 
-    Returns None if no filing has report_date <= as_of_date, or if no price is available.
+    Returns None if no filing has report_date <= as_of_date, if no price is
+    available, or if the ticker doesn't resolve on EDGAR (e.g. no CIK in the
+    current SEC map). At index scale one unresolvable name must not abort the
+    pre-load of the whole universe — the replay loop treats None as "skip".
     price_period defaults to "5y" because backtest as-of dates can sit well before
     today; a 1y price window would return None for older decision dates.
     """
-    filings = get_filings_history(ticker)
+    from src.data.edgar import EdgarError
+    try:
+        filings = get_filings_history(ticker)
+    except EdgarError:
+        return None
     eligible = [f for f in filings if f["report_date"] and f["report_date"] <= as_of_date]
     if not eligible:
         return None

@@ -27,7 +27,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -88,29 +89,72 @@ def _get(url: str) -> Any:
 # ==========================================
 
 
+# SEC regenerates company_tickers.json continuously; a local copy older than this
+# is refetched on next use. A stale copy silently misses newly-added/changed current
+# members (we hit exactly this — CTRA/DAY/HOLX were absent). The TTL is the refresh
+# *trigger*: no cron, the next lookup after expiry self-heals.
+_CIK_MAP_MAX_AGE = timedelta(days=30)
+
+
 def _cik_map_path() -> Path:
     return REF_DIR / "company_tickers.json"
 
 
-def _load_cik_map() -> dict[str, str]:
-    """Returns {TICKER: zero-padded 10-digit CIK}. Cached on disk under data/reference."""
+def _ensure_cik_map_fresh() -> None:
+    """(Re)download the SEC ticker->CIK map if absent or past the TTL.
+
+    On a failed refresh we keep the existing copy (an offline run or an SEC
+    hiccup shouldn't break lookups); only a missing-and-unfetchable map raises."""
     path = _cik_map_path()
-    if not path.exists():
+    if path.exists():
+        age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
+        if age <= _CIK_MAP_MAX_AGE:
+            return
+    try:
         REF_DIR.mkdir(parents=True, exist_ok=True)
         data = _get(f"{SEC_WWW_BASE}/files/company_tickers.json")
         path.write_text(json.dumps(data))
-    else:
-        data = json.loads(path.read_text())
+        _load_cik_map.cache_clear()
+        logger.info("Refreshed SEC ticker->CIK map (company_tickers.json)")
+    except EdgarError as e:
+        if not path.exists():
+            raise
+        logger.warning(f"SEC CIK map refresh failed ({e}); using cached copy")
+
+
+@lru_cache(maxsize=1)
+def _load_cik_map() -> dict[str, str]:
+    """Returns {TICKER: zero-padded 10-digit CIK} from the on-disk SEC map.
+    Cached in-process; _ensure_cik_map_fresh clears it on a successful refresh."""
+    data = json.loads(_cik_map_path().read_text())
     out: dict[str, str] = {}
     for row in data.values():
         out[str(row["ticker"]).upper()] = str(row["cik_str"]).zfill(10)
     return out
 
 
+@lru_cache(maxsize=1)
+def _load_fmp_cik_map() -> dict[str, str]:
+    """Ticker -> CIK from the FMP-derived historical map (data/reference/
+    ticker_cik_historical.json). Fallback for names the SEC's current-only
+    company_tickers map misses: drift (e.g. CTRA/DAY/HOLX) and delisted names
+    (whose XBRL still lives on EDGAR by permanent CIK). Values are 10-digit
+    strings or null; nulls are skipped. Empty dict if the file isn't present."""
+    path = REF_DIR / "ticker_cik_historical.json"
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    return {t.upper(): cik for t, cik in data.items() if cik}
+
+
 def ticker_to_cik(ticker: str) -> str:
-    cik = _load_cik_map().get(ticker.upper())
+    _ensure_cik_map_fresh()
+    t = ticker.upper()
+    # SEC map is authoritative + broad for current names; the FMP historical map is
+    # the fallback for what SEC can't have (delisted names) and any current-map drift.
+    cik = _load_cik_map().get(t) or _load_fmp_cik_map().get(t)
     if cik is None:
-        raise EdgarError(f"No CIK found for ticker {ticker} in SEC company_tickers map")
+        raise EdgarError(f"No CIK found for ticker {ticker} in SEC or FMP CIK maps")
     return cik
 
 
@@ -159,8 +203,15 @@ def recent_filings(ticker: str, forms: tuple[str, ...] = ("10-Q", "10-K")) -> li
 
 def recent_filing_dates(ticker: str, forms: tuple[str, ...] = ("10-Q", "10-K")) -> list[str]:
     """Sorted filing dates (YYYY-MM-DD) for the given forms — the event screen's "did
-    this name just file?" check. Derived from the same cached submissions blob."""
-    return sorted(f["filed"] for f in recent_filings(ticker, forms))
+    this name just file?" check. Derived from the same cached submissions blob.
+
+    Returns [] for a ticker that doesn't resolve to a CIK (neither SEC nor FMP map):
+    the screen runs over the whole index, so an unresolvable name must drop out
+    quietly rather than abort the run (it simply never registers as a fresh filer)."""
+    try:
+        return sorted(f["filed"] for f in recent_filings(ticker, forms))
+    except EdgarError:
+        return []
 
 
 def _get_text(url: str) -> str:

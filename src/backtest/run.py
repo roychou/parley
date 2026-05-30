@@ -46,8 +46,9 @@ from src.backtest.strategies import (
     SPYHoldStrategy,
 )
 from src.data.edgar import recent_filing_dates
-from src.data.fetch_prices import get_prices
+from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
+from src.data.technicals import get_technicals_as_of
 from src.data.universe import membership_end, sp500_as_of
 
 load_dotenv()
@@ -78,6 +79,8 @@ def build_strategies(
     screen_lookback_days: int = 100,
     include_sentiment: bool = False,
     use_batch: bool = False,
+    fundamentals_loader=None,
+    technicals_loader=None,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -90,15 +93,25 @@ def build_strategies(
     API) instead of firing inline — the fix for tier-1 throttling at index scale.
     The high-concurrency scaffold config lets the sentiment map fan-out coalesce
     into a single batch wave rather than being gated by the live-path semaphore.
+
+    fundamentals_loader / technicals_loader are the supervisor's own point-in-time
+    loaders; when None the supervisor uses its defaults (live, 5y). sp500 mode binds
+    them to the cached "max" series so per-candidate analysis stays offline too.
     """
     signal_cache = SignalCache(SIGNAL_CACHE_DIR, default_version=cache_version)
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
     messages_api = BatchLLM(client) if use_batch else None
     scaffold_config = ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None
+    loader_kwargs = {}
+    if fundamentals_loader is not None:
+        loader_kwargs["fundamentals_loader"] = fundamentals_loader
+    if technicals_loader is not None:
+        loader_kwargs["technicals_loader"] = technicals_loader
     provider = partial(
         run_backtest_supervisor, client,
         signal_cache=signal_cache, include_sentiment=include_sentiment,
         messages_api=messages_api, scaffold_config=scaffold_config,
+        **loader_kwargs,
     )
     return [
         MultiAgentStrategy(
@@ -124,38 +137,85 @@ async def run(
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
-    # (mandatory at ~500 names). Watchlist mode: the static --tickers, no screen.
-    universe_loader = sp500_as_of if use_sp500 else None
-    filing_dates_fn = recent_filing_dates if use_sp500 else None
+    # (mandatory at ~500 names), run offline against the deep ("max") grabbed price
+    # cache — coverage-filtered so a name with no cached prices is dropped rather
+    # than triggering a live FMP fetch mid-run. Watchlist mode: the static --tickers,
+    # no screen, 5y history (live-fetchable on a miss — the universe is tiny).
+    if use_sp500:
+        universe_loader = _covered_universe(sp500_as_of, "max")
+        price_loader = _cached_price_loader("max")
+        # Both the replay's baseline pre-load and the supervisor's per-candidate
+        # analysis read the as-of close from the cached "max" series — the grab only
+        # captured "max" depth, so the default "5y" would miss and try a live fetch.
+        fundamentals_loader = partial(get_fundamentals_as_of, price_period="max")
+        technicals_loader = partial(get_technicals_as_of, price_period="max")
+        filing_dates_fn = recent_filing_dates
+    else:
+        universe_loader = None
+        price_loader = _truncating_price_loader("5y")
+        fundamentals_loader = get_fundamentals_as_of
+        technicals_loader = None  # supervisor default (live, 5y) is fine for the watchlist
+        filing_dates_fn = None
     config = BacktestConfig(
         universe=[] if use_sp500 else tickers,
         decision_dates=sorted(dates),
         strategies=build_strategies(
             client, cache_version, filing_dates_fn, screen_lookback_days,
             include_sentiment, use_batch,
+            fundamentals_loader=fundamentals_loader if use_sp500 else None,
+            technicals_loader=technicals_loader,
         ),
         universe_loader=universe_loader,
     )
-    # sp500 mode uses the deep ("max") grabbed history; watchlist uses 5y (a 6-month
-    # window + indicator lookback reaches past 1y on the earliest dates).
-    price_period = "max" if use_sp500 else "5y"
     return await run_backtest(
         config,
-        price_loader=_truncating_price_loader(price_period),
-        fundamentals_loader=get_fundamentals_as_of,
+        price_loader=price_loader,
+        fundamentals_loader=fundamentals_loader,
     )
 
 
+def _truncate_to_membership(prices: dict, ticker: str) -> dict:
+    """Truncate a delisted name's series at its membership end — guards against
+    recycled ticker symbols returning a different company's prices after the
+    delisting date (see universe.membership_end)."""
+    end = membership_end(ticker)
+    if end is not None:
+        return {d: bar for d, bar in prices.items() if d <= end}
+    return prices
+
+
 def _truncating_price_loader(period: str):
-    """Price loader that truncates a delisted name's series at its membership end —
-    guards against recycled ticker symbols returning a different company's prices
-    after the delisting date (see universe.membership_end)."""
+    """Live-capable loader (watchlist mode): cached prices, fetching on a miss."""
     def loader(ticker: str) -> dict:
-        prices = get_prices(ticker, period=period)
-        end = membership_end(ticker)
-        if end is not None:
-            prices = {d: bar for d, bar in prices.items() if d <= end}
-        return prices
+        return _truncate_to_membership(get_prices(ticker, period=period), ticker)
+    return loader
+
+
+def _cached_price_loader(period: str):
+    """Offline loader (sp500 mode): cached history only, never a live FMP fetch.
+    A backtest replays grabbed data; an uncached name returns {} and is excluded
+    upstream by _covered_universe, so the run can't stall on a live 402."""
+    def loader(ticker: str) -> dict:
+        prices = load_latest_cache(ticker, period) or {}
+        return _truncate_to_membership(prices, ticker)
+    return loader
+
+
+def _covered_universe(universe_loader, period: str):
+    """Restrict a point-in-time universe to names with cached price history.
+    A name we can't price can't be marked-to-market, traded, or backtested, so it
+    is dropped here (and logged) rather than wasting an LLM analysis or hitting a
+    live fetch. Keeps the offline backtest honest about its coverage."""
+    def loader(date: str) -> list[str]:
+        members = universe_loader(date)
+        covered = [t for t in members if load_latest_cache(t, period)]
+        dropped = len(members) - len(covered)
+        if dropped:
+            logger.info(
+                f"universe {date}: {len(covered)}/{len(members)} price-covered "
+                f"({dropped} dropped — no cached prices)"
+            )
+        return covered
     return loader
 
 
