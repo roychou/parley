@@ -32,7 +32,9 @@ from pathlib import Path
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
+from src.agents.scaffold import ScaffoldConfig
 from src.backtest.backtest_supervisor import run_backtest_supervisor
+from src.backtest.batch import BatchLLM
 from src.backtest.cache import SignalCache
 from src.backtest.metrics import StrategyMetrics, compute_metrics
 from src.backtest.replay import BacktestConfig, BacktestResult, run_backtest
@@ -75,6 +77,7 @@ def build_strategies(
     filing_dates_fn=None,
     screen_lookback_days: int = 100,
     include_sentiment: bool = False,
+    use_batch: bool = False,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -82,12 +85,20 @@ def build_strategies(
     strategy (required at index scale; None analyzes the whole given universe).
     The baselines are deterministic (no LLM) and rank/screen within the universe
     they're handed each period.
+
+    use_batch routes every specialist LLM call through a BatchLLM (Message Batches
+    API) instead of firing inline — the fix for tier-1 throttling at index scale.
+    The high-concurrency scaffold config lets the sentiment map fan-out coalesce
+    into a single batch wave rather than being gated by the live-path semaphore.
     """
     signal_cache = SignalCache(SIGNAL_CACHE_DIR, default_version=cache_version)
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
+    messages_api = BatchLLM(client) if use_batch else None
+    scaffold_config = ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None
     provider = partial(
         run_backtest_supervisor, client,
         signal_cache=signal_cache, include_sentiment=include_sentiment,
+        messages_api=messages_api, scaffold_config=scaffold_config,
     )
     return [
         MultiAgentStrategy(
@@ -109,6 +120,7 @@ async def run(
     use_sp500: bool = False,
     screen_lookback_days: int = 100,
     include_sentiment: bool = False,
+    use_batch: bool = False,
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
@@ -119,7 +131,8 @@ async def run(
         universe=[] if use_sp500 else tickers,
         decision_dates=sorted(dates),
         strategies=build_strategies(
-            client, cache_version, filing_dates_fn, screen_lookback_days, include_sentiment
+            client, cache_version, filing_dates_fn, screen_lookback_days,
+            include_sentiment, use_batch,
         ),
         universe_loader=universe_loader,
     )
@@ -221,14 +234,23 @@ def main() -> None:
         help="Add the sentiment specialist (reads filing narrative; more LLM calls). "
              "Off = the Release-1 cut line.",
     )
+    parser.add_argument(
+        "--batch", action="store_true",
+        help="Route all specialist LLM calls through the Message Batches API "
+             "(coalesced, ~50%% cheaper, no per-minute throttle). Recommended for "
+             "the full S&P 500 run, especially with --sentiment.",
+    )
     args = parser.parse_args()
 
     scope = "S&P 500 (PIT) + event screen" if args.sp500 else f"{len(args.tickers)} watchlist"
     sent = " + sentiment" if args.sentiment else ""
-    logger.info(f"Backtest: {scope}{sent} x {len(args.dates)} dates, cache version={args.version}")
+    mode = " [batch]" if args.batch else ""
+    logger.info(
+        f"Backtest: {scope}{sent}{mode} x {len(args.dates)} dates, cache version={args.version}"
+    )
     result = asyncio.run(
         run(args.tickers, args.dates, args.version, args.sp500,
-            args.screen_lookback_days, args.sentiment)
+            args.screen_lookback_days, args.sentiment, args.batch)
     )
     print_summary(result)
 

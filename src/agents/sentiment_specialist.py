@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import logging
 
-from anthropic import AsyncAnthropic
-
 from src.agents.scaffold import LLMCall, ScaffoldConfig, analyze_text
 from src.data.edgar import EdgarError, recent_filings
 from src.data.edgar_filings import clean_text, extract_sections, fetch_filing_document
+from src.llm import MessageCreator
 from src.schemas.sentiment import SentimentAnalysis
 
 logger = logging.getLogger(__name__)
@@ -67,10 +66,10 @@ change is immaterial.
 - Echo source_form and filed from the provided metadata."""
 
 
-def _make_llm(client: AsyncAnthropic) -> LLMCall:
-    """Adapt AsyncAnthropic to the scaffold's (model, system, user) -> text contract."""
+def _make_llm(messages_api: MessageCreator) -> LLMCall:
+    """Adapt a MessageCreator to the scaffold's (model, system, user) -> text contract."""
     async def llm(model: str, system: str, user: str) -> str:
-        resp = await client.messages.create(
+        resp = await messages_api.create(
             model=model,
             max_tokens=MAX_TOKENS,
             system=system,
@@ -120,29 +119,32 @@ async def _filing_summary(llm: LLMCall, ticker: str, filing: dict, config: Scaff
 
 
 async def run_sentiment_specialist(
-    client: AsyncAnthropic,
+    messages_api: MessageCreator,
     ticker: str,
     as_of: str,
     config: ScaffoldConfig | None = None,
 ) -> SentimentAnalysis | None:
     """Produce a SentimentAnalysis for (ticker, as_of) from the filing narrative, or
-    None if no filing is available as of the date (caller drops sentiment that period)."""
+    None if no filing is available as of the date (caller drops sentiment that period).
+
+    messages_api is the injected LLM seam: client.messages on the live path, or a
+    BatchLLM on the batched path (which coalesces the scaffold's map fan-out)."""
     current, prior = _select_filings(ticker, as_of)
     if current is None:
         return None
     config = config or ScaffoldConfig(root_model=ROOT_MODEL, leaf_model=LEAF_MODEL)
-    llm = _make_llm(client)
+    llm = _make_llm(messages_api)
 
     current_summary = await _filing_summary(llm, ticker, current, config)
     prior_summary = await _filing_summary(llm, ticker, prior, config) if prior else None
 
     return await _synthesize_sentiment(
-        client, ticker, as_of, current, current_summary, prior_summary
+        messages_api, ticker, as_of, current, current_summary, prior_summary
     )
 
 
 async def _synthesize_sentiment(
-    client: AsyncAnthropic,
+    messages_api: MessageCreator,
     ticker: str,
     as_of: str,
     current: dict,
@@ -156,7 +158,7 @@ async def _synthesize_sentiment(
         f"PRIOR {current['form']} NARRATIVE SUMMARY (for change detection):\n"
         f"{prior_summary or '(no prior filing available)'}"
     )
-    resp = await client.messages.create(
+    resp = await messages_api.create(
         model=ROOT_MODEL,
         max_tokens=MAX_TOKENS,
         system=_SYNTHESIS_SYSTEM,

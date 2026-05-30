@@ -46,11 +46,6 @@ class _FakeMessages:
         return _Resp([_Block("text", text="narrative summary")])  # scaffold calls
 
 
-class _FakeClient:
-    def __init__(self):
-        self.messages = _FakeMessages()
-
-
 def _patch_edgar(monkeypatch):
     monkeypatch.setattr(ss, "recent_filings", lambda t, *a, **k: _FILINGS)
     monkeypatch.setattr(ss, "fetch_filing_document", lambda t, acc, doc: "<html>x</html>")
@@ -76,8 +71,8 @@ def test_current_filing_key(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_returns_sentiment_analysis(monkeypatch):
     _patch_edgar(monkeypatch)
-    client = _FakeClient()
-    result = await ss.run_sentiment_specialist(client, "MSFT", "2026-05-01")
+    mc = _FakeMessages()  # the injected MessageCreator (client.messages, or a BatchLLM)
+    result = await ss.run_sentiment_specialist(mc, "MSFT", "2026-05-01")
 
     assert isinstance(result, SentimentAnalysis)
     assert result.signal == "BEARISH"
@@ -85,11 +80,11 @@ async def test_run_returns_sentiment_analysis(monkeypatch):
     assert result.source_form == "10-Q" and result.filed == "2026-04-29"  # defaults filled
     assert result.notable_changes == ["new AI-competition risk"]
     # 2 filing summaries (current + prior) + 1 synthesis call:
-    assert len(client.messages.calls) == 3
-    assert sum("tools" in c for c in client.messages.calls) == 1
+    assert len(mc.calls) == 3
+    assert sum("tools" in c for c in mc.calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_run_returns_none_when_no_filing(monkeypatch):
     monkeypatch.setattr(ss, "recent_filings", lambda t, *a, **k: [])
-    assert await ss.run_sentiment_specialist(_FakeClient(), "MSFT", "2026-05-01") is None
+    assert await ss.run_sentiment_specialist(_FakeMessages(), "MSFT", "2026-05-01") is None

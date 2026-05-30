@@ -32,11 +32,13 @@ from typing import Callable
 from anthropic import AsyncAnthropic
 
 from src.agents.fundamentals_specialist import FUNDAMENTALS_ROLE_PROMPT
+from src.agents.scaffold import ScaffoldConfig
 from src.agents.sentiment_specialist import current_filing_key, run_sentiment_specialist
 from src.agents.technicals_specialist import TECHNICALS_ROLE_PROMPT
 from src.backtest.cache import SignalCache, cached_signal
 from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of, pe_band
 from src.data.technicals import TechnicalsSnapshot, get_technicals_as_of
+from src.llm import MessageCreator
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
 from src.schemas.sentiment import SentimentAnalysis
@@ -71,6 +73,8 @@ async def run_backtest_supervisor(
     technicals_loader: TechnicalsLoader = get_technicals_as_of,
     signal_cache: SignalCache | None = None,
     include_sentiment: bool = False,
+    messages_api: MessageCreator | None = None,
+    scaffold_config: ScaffoldConfig | None = None,
 ) -> Decision:
     """Produce a Decision for (ticker, as_of) using point-in-time data and the real LLM.
 
@@ -82,7 +86,15 @@ async def run_backtest_supervisor(
       until a new filing lands or P/E crosses a threshold band.
     - technicals key = as_of — they change every trading day.
     Synthesis is always recomputed from the (cached) signals, so it stays fresh.
+
+    messages_api is the injected LLM seam, defaulting to client.messages. Pass a
+    BatchLLM to coalesce all specialist calls into Batch API jobs (no per-minute
+    throttle at index scale); scaffold_config then sets a high map concurrency so
+    the sentiment fan-out coalesces into one wave rather than the live semaphore.
     """
+    # The injected seam wins; otherwise the live client.messages. (Tests patch the
+    # specialist calls and pass client=None, so resolve lazily rather than eagerly.)
+    mc = messages_api if messages_api is not None else (client.messages if client else None)
     fundamentals_data = fundamentals_loader(ticker, as_of)
     technicals_data = technicals_loader(ticker, as_of)
 
@@ -96,11 +108,11 @@ async def run_backtest_supervisor(
     coros = [
         cached_signal(
             signal_cache, "fundamentals", ticker, fundamentals_key, FundamentalsAnalysis,
-            lambda: _call_fundamentals_with_data(client, ticker, as_of, fundamentals_data),
+            lambda: _call_fundamentals_with_data(mc, ticker, as_of, fundamentals_data),
         ),
         cached_signal(
             signal_cache, "technicals", ticker, as_of, TechnicalsAnalysis,
-            lambda: _call_technicals_with_data(client, ticker, as_of, technicals_data),
+            lambda: _call_technicals_with_data(mc, ticker, as_of, technicals_data),
         ),
     ]
     # Sentiment (optional): keyed by the current filing accession, so it's reused
@@ -112,7 +124,7 @@ async def run_backtest_supervisor(
         if sentiment_key:
             coros.append(cached_signal(
                 signal_cache, "sentiment", ticker, sentiment_key, SentimentAnalysis,
-                lambda: run_sentiment_specialist(client, ticker, as_of),
+                lambda: run_sentiment_specialist(mc, ticker, as_of, config=scaffold_config),
             ))
 
     signals = list(await asyncio.gather(*coros))
@@ -125,7 +137,7 @@ async def run_backtest_supervisor(
 
 
 async def _call_fundamentals_with_data(
-    client: AsyncAnthropic,
+    messages_api: MessageCreator,
     ticker: str,
     as_of: str,
     data: ValuationSnapshot,
@@ -139,7 +151,7 @@ async def _call_fundamentals_with_data(
         f"FUNDAMENTALS DATA:\n{json.dumps(data_dict, indent=2)}"
     )
 
-    response = await client.messages.create(
+    response = await messages_api.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=FUNDAMENTALS_ROLE_PROMPT,
@@ -165,7 +177,7 @@ async def _call_fundamentals_with_data(
 
 
 async def _call_technicals_with_data(
-    client: AsyncAnthropic,
+    messages_api: MessageCreator,
     ticker: str,
     as_of: str,
     data: TechnicalsSnapshot,
@@ -179,7 +191,7 @@ async def _call_technicals_with_data(
         f"TECHNICALS DATA:\n{json.dumps(data_dict, indent=2)}"
     )
 
-    response = await client.messages.create(
+    response = await messages_api.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
         system=TECHNICALS_ROLE_PROMPT,

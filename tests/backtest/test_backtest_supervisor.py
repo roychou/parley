@@ -160,7 +160,7 @@ async def test_sentiment_included_when_filing_exists(monkeypatch, tmp_path):
     _patch_specialist_calls(monkeypatch)
     sentiment_calls: list[str] = []
 
-    async def fake_sentiment(client, ticker, as_of):
+    async def fake_sentiment(messages_api, ticker, as_of, config=None):
         sentiment_calls.append(ticker)
         return SentimentAnalysis(
             specialist="sentiment", ticker=ticker, signal="BEARISH", confidence=0.6,
