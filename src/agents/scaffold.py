@@ -28,6 +28,9 @@ class ScaffoldConfig:
     max_single_call_tokens: int = 12_000
     chunk_tokens: int = 9_000
     overlap_tokens: int = 400
+    # Cap parallel leaf calls so a large filing's map step can't burst past the
+    # per-minute input-token rate limit (each chunk is ~chunk_tokens of input).
+    max_concurrent_chunks: int = 3
 
 
 def estimate_tokens(text: str) -> int:
@@ -81,8 +84,12 @@ async def analyze_text(
         return await llm(config.root_model, analysis_system, text)
 
     chunks = chunk_text(text, config.chunk_tokens, config.overlap_tokens)
-    observations = await asyncio.gather(
-        *(llm(config.leaf_model, map_system, chunk) for chunk in chunks)
-    )
+    sem = asyncio.Semaphore(config.max_concurrent_chunks)
+
+    async def _map(chunk: str) -> str:
+        async with sem:
+            return await llm(config.leaf_model, map_system, chunk)
+
+    observations = await asyncio.gather(*(_map(chunk) for chunk in chunks))
     combined = "\n\n---\n\n".join(observations)
     return await llm(config.root_model, analysis_system, combined)

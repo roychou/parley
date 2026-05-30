@@ -5,6 +5,7 @@ from src.backtest.cache import SignalCache
 from src.data.fundamentals import ValuationSnapshot, pe_band
 from src.data.technicals import TechnicalsSnapshot
 from src.schemas.fundamentals import FundamentalsAnalysis
+from src.schemas.sentiment import SentimentAnalysis
 from src.schemas.technicals import TechnicalsAnalysis
 
 _REASONING = "Synthetic reasoning padded to satisfy the min_length=50 constraint on the signal."
@@ -136,3 +137,80 @@ async def test_fundamentals_recompute_when_pe_crosses_band(monkeypatch, tmp_path
 
     # Two computes: the band crossing invalidated the cache.
     assert fund_calls == ["2026-01-09", "2026-01-16"]
+
+
+# ==========================================
+# sentiment specialist integration (include_sentiment)
+# ==========================================
+
+
+def _patch_specialist_calls(monkeypatch):
+    async def fake_fundamentals(client, ticker, as_of, data):
+        return _fund_analysis()
+
+    async def fake_technicals(client, ticker, as_of, data):
+        return _tech_analysis()
+
+    monkeypatch.setattr(bsup, "_call_fundamentals_with_data", fake_fundamentals)
+    monkeypatch.setattr(bsup, "_call_technicals_with_data", fake_technicals)
+
+
+@pytest.mark.asyncio
+async def test_sentiment_included_when_filing_exists(monkeypatch, tmp_path):
+    _patch_specialist_calls(monkeypatch)
+    sentiment_calls: list[str] = []
+
+    async def fake_sentiment(client, ticker, as_of):
+        sentiment_calls.append(ticker)
+        return SentimentAnalysis(
+            specialist="sentiment", ticker=ticker, signal="BEARISH", confidence=0.6,
+            reasoning=_REASONING, as_of=as_of, tone="cautious",
+            notable_changes=["new risk"], source_form="10-Q", filed="2026-01-05",
+        )
+
+    monkeypatch.setattr(bsup, "current_filing_key", lambda t, a: "ACC1")
+    monkeypatch.setattr(bsup, "run_sentiment_specialist", fake_sentiment)
+
+    decision = await bsup.run_backtest_supervisor(
+        client=None, ticker="AAA", as_of="2026-01-09",
+        fundamentals_loader=lambda t, d: _val_snapshot(20.0),
+        technicals_loader=lambda t, d: _tech_snapshot(d),
+        signal_cache=SignalCache(tmp_path), include_sentiment=True,
+    )
+    specialists = {s.specialist for s in decision.contributing_signals}
+    assert specialists == {"fundamentals", "technicals", "sentiment"}
+    assert sentiment_calls == ["AAA"]
+
+
+@pytest.mark.asyncio
+async def test_sentiment_skipped_when_no_filing(monkeypatch, tmp_path):
+    _patch_specialist_calls(monkeypatch)
+    monkeypatch.setattr(bsup, "current_filing_key", lambda t, a: None)  # e.g. delisted
+
+    decision = await bsup.run_backtest_supervisor(
+        client=None, ticker="AAA", as_of="2026-01-09",
+        fundamentals_loader=lambda t, d: _val_snapshot(20.0),
+        technicals_loader=lambda t, d: _tech_snapshot(d),
+        signal_cache=SignalCache(tmp_path), include_sentiment=True,
+    )
+    # No filing -> sentiment dropped, just the two numeric specialists.
+    assert {s.specialist for s in decision.contributing_signals} == {"fundamentals", "technicals"}
+
+
+@pytest.mark.asyncio
+async def test_sentiment_off_by_default(monkeypatch, tmp_path):
+    _patch_specialist_calls(monkeypatch)
+
+    # current_filing_key shouldn't even be consulted when include_sentiment is False.
+    def _boom(t, a):
+        raise AssertionError("current_filing_key consulted with sentiment off")
+
+    monkeypatch.setattr(bsup, "current_filing_key", _boom)
+
+    decision = await bsup.run_backtest_supervisor(
+        client=None, ticker="AAA", as_of="2026-01-09",
+        fundamentals_loader=lambda t, d: _val_snapshot(20.0),
+        technicals_loader=lambda t, d: _tech_snapshot(d),
+        signal_cache=SignalCache(tmp_path),
+    )
+    assert {s.specialist for s in decision.contributing_signals} == {"fundamentals", "technicals"}

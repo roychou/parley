@@ -32,12 +32,14 @@ from typing import Callable
 from anthropic import AsyncAnthropic
 
 from src.agents.fundamentals_specialist import FUNDAMENTALS_ROLE_PROMPT
+from src.agents.sentiment_specialist import current_filing_key, run_sentiment_specialist
 from src.agents.technicals_specialist import TECHNICALS_ROLE_PROMPT
 from src.backtest.cache import SignalCache, cached_signal
 from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of, pe_band
 from src.data.technicals import TechnicalsSnapshot, get_technicals_as_of
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
+from src.schemas.sentiment import SentimentAnalysis
 from src.schemas.technicals import TechnicalsAnalysis
 from src.synthesis import synthesize
 
@@ -68,6 +70,7 @@ async def run_backtest_supervisor(
     fundamentals_loader: FundamentalsLoader = get_fundamentals_as_of,
     technicals_loader: TechnicalsLoader = get_technicals_as_of,
     signal_cache: SignalCache | None = None,
+    include_sentiment: bool = False,
 ) -> Decision:
     """Produce a Decision for (ticker, as_of) using point-in-time data and the real LLM.
 
@@ -90,7 +93,7 @@ async def run_backtest_supervisor(
 
     fundamentals_key = f"{fundamentals_data.report_date}_pe-{pe_band(fundamentals_data.pe_ratio)}"
 
-    fundamentals_analysis, technicals_analysis = await asyncio.gather(
+    coros = [
         cached_signal(
             signal_cache, "fundamentals", ticker, fundamentals_key, FundamentalsAnalysis,
             lambda: _call_fundamentals_with_data(client, ticker, as_of, fundamentals_data),
@@ -99,13 +102,21 @@ async def run_backtest_supervisor(
             signal_cache, "technicals", ticker, as_of, TechnicalsAnalysis,
             lambda: _call_technicals_with_data(client, ticker, as_of, technicals_data),
         ),
-    )
+    ]
+    # Sentiment (optional): keyed by the current filing accession, so it's reused
+    # across decision dates until a new filing. Skipped when no filing is available
+    # as of the date (e.g. delisted names with no current CIK) — its absence just
+    # drops one vote from synthesis.
+    if include_sentiment:
+        sentiment_key = current_filing_key(ticker, as_of)
+        if sentiment_key:
+            coros.append(cached_signal(
+                signal_cache, "sentiment", ticker, sentiment_key, SentimentAnalysis,
+                lambda: run_sentiment_specialist(client, ticker, as_of),
+            ))
 
-    return synthesize(
-        ticker=ticker,
-        signals=[fundamentals_analysis, technicals_analysis],
-        as_of=as_of,
-    )
+    signals = list(await asyncio.gather(*coros))
+    return synthesize(ticker=ticker, signals=signals, as_of=as_of)
 
 
 # ==========================================

@@ -18,7 +18,7 @@ import logging
 from anthropic import AsyncAnthropic
 
 from src.agents.scaffold import LLMCall, ScaffoldConfig, analyze_text
-from src.data.edgar import recent_filings
+from src.data.edgar import EdgarError, recent_filings
 from src.data.edgar_filings import clean_text, extract_sections, fetch_filing_document
 from src.schemas.sentiment import SentimentAnalysis
 
@@ -96,8 +96,12 @@ def _select_filings(ticker: str, as_of: str) -> tuple[dict | None, dict | None]:
 
 def current_filing_key(ticker: str, as_of: str) -> str | None:
     """Accession of the filing the sentiment signal is based on — the signal-cache
-    data_version. None if no filing is available as of the date."""
-    current, _ = _select_filings(ticker, as_of)
+    data_version. None if no filing is available as of the date, or if the ticker
+    doesn't resolve to a CIK (e.g. a delisted name) — caller drops sentiment then."""
+    try:
+        current, _ = _select_filings(ticker, as_of)
+    except EdgarError:
+        return None
     return current["accession"] if current else None
 
 

@@ -74,6 +74,7 @@ def build_strategies(
     cache_version: str,
     filing_dates_fn=None,
     screen_lookback_days: int = 100,
+    include_sentiment: bool = False,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -84,7 +85,10 @@ def build_strategies(
     """
     signal_cache = SignalCache(SIGNAL_CACHE_DIR, default_version=cache_version)
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
-    provider = partial(run_backtest_supervisor, client, signal_cache=signal_cache)
+    provider = partial(
+        run_backtest_supervisor, client,
+        signal_cache=signal_cache, include_sentiment=include_sentiment,
+    )
     return [
         MultiAgentStrategy(
             decision_provider=provider,
@@ -104,6 +108,7 @@ async def run(
     cache_version: str,
     use_sp500: bool = False,
     screen_lookback_days: int = 100,
+    include_sentiment: bool = False,
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
@@ -113,7 +118,9 @@ async def run(
     config = BacktestConfig(
         universe=[] if use_sp500 else tickers,
         decision_dates=sorted(dates),
-        strategies=build_strategies(client, cache_version, filing_dates_fn, screen_lookback_days),
+        strategies=build_strategies(
+            client, cache_version, filing_dates_fn, screen_lookback_days, include_sentiment
+        ),
         universe_loader=universe_loader,
     )
     # sp500 mode uses the deep ("max") grabbed history; watchlist uses 5y (a 6-month
@@ -209,12 +216,19 @@ def main() -> None:
         "--screen-lookback-days", type=int, default=100,
         help="First-decision filing window for the event screen (sp500 mode).",
     )
+    parser.add_argument(
+        "--sentiment", action="store_true",
+        help="Add the sentiment specialist (reads filing narrative; more LLM calls). "
+             "Off = the Release-1 cut line.",
+    )
     args = parser.parse_args()
 
     scope = "S&P 500 (PIT) + event screen" if args.sp500 else f"{len(args.tickers)} watchlist"
-    logger.info(f"Backtest: {scope} x {len(args.dates)} dates, cache version={args.version}")
+    sent = " + sentiment" if args.sentiment else ""
+    logger.info(f"Backtest: {scope}{sent} x {len(args.dates)} dates, cache version={args.version}")
     result = asyncio.run(
-        run(args.tickers, args.dates, args.version, args.sp500, args.screen_lookback_days)
+        run(args.tickers, args.dates, args.version, args.sp500,
+            args.screen_lookback_days, args.sentiment)
     )
     print_summary(result)
 
