@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from src.backtest.costs import CostModel
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,11 +29,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Position:
-    """An open position. Created on open, removed on close."""
+    """An open position. Created on open, removed on close.
+
+    `entry_price` is the actual fill price (already slippage-adjusted). `dollars_at_entry`
+    is the notional put to work at that fill; `cost_at_entry` is the entry commission
+    (cash), tracked so the closed-trade P&L can be reported net of both legs' costs.
+    """
     ticker: str
     entry_date: str
     entry_price: float
     dollars_at_entry: float
+    cost_at_entry: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -67,9 +75,17 @@ class Portfolio:
     Not thread-safe. Each backtest strategy gets its own Portfolio instance.
     """
 
-    def __init__(self, initial_cash: float = 100_000.0, max_positions: int = 10):
+    def __init__(
+        self,
+        initial_cash: float = 100_000.0,
+        max_positions: int = 10,
+        cost_model: CostModel | None = None,
+    ):
         self.initial_cash = initial_cash
         self.max_positions = max_positions
+        # Default frictionless: a Portfolio without a cost model behaves exactly as
+        # before (slippage 0, commission 0), so zero-cost callers are unchanged.
+        self.costs = cost_model or CostModel()
 
         self.cash: float = initial_cash
         self.positions: dict[str, Position] = {}
@@ -107,16 +123,25 @@ class Portfolio:
         if not self.can_open(ticker):
             logger.debug(f"open rejected: cannot open {ticker} (held or at max)")
             return False
-        if dollars > self.cash:
-            logger.debug(f"open rejected: insufficient cash for {ticker} (need {dollars}, have {self.cash})")
+
+        # Adverse fill (buy pays up) + entry commission charged in cash. Total cash
+        # outlay is the notional plus commission; reject if it exceeds available cash.
+        fill = self.costs.fill_price(price, "BUY")
+        commission = self.costs.commission(dollars, fill)
+        if dollars + commission > self.cash:
+            logger.debug(
+                f"open rejected: insufficient cash for {ticker} "
+                f"(need {dollars + commission}, have {self.cash})"
+            )
             return False
 
-        self.cash -= dollars
+        self.cash -= dollars + commission
         self.positions[ticker] = Position(
             ticker=ticker,
             entry_date=date,
-            entry_price=price,
+            entry_price=fill,
             dollars_at_entry=dollars,
+            cost_at_entry=commission,
         )
         return True
 
@@ -126,16 +151,25 @@ class Portfolio:
             return False
 
         pos = self.positions[ticker]
-        pnl_pct = (price - pos.entry_price) / pos.entry_price
-        exit_dollars = self._position_value(pos, price)
-        self.cash += exit_dollars
+        # Adverse fill (sell receives less) + exit commission. P&L is reported NET of
+        # both legs' costs: proceeds (exit value minus exit commission) vs. cost basis
+        # (entry notional plus entry commission). With a frictionless model this
+        # reduces to the gross (exit-entry)/entry, so zero-cost callers are unchanged.
+        fill = self.costs.fill_price(price, "SELL")
+        exit_dollars = self._position_value(pos, fill)
+        commission = self.costs.commission(exit_dollars, fill)
+        self.cash += exit_dollars - commission
+
+        cost_basis = pos.dollars_at_entry + pos.cost_at_entry
+        proceeds = exit_dollars - commission
+        pnl_pct = (proceeds - cost_basis) / cost_basis
 
         self.closed_trades.append(Trade(
             ticker=ticker,
             entry_date=pos.entry_date,
             entry_price=pos.entry_price,
             exit_date=date,
-            exit_price=price,
+            exit_price=fill,
             exit_reason=reason,
             dollars_at_entry=pos.dollars_at_entry,
             realized_pnl_pct=pnl_pct,

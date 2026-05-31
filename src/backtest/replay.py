@@ -29,6 +29,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
+from src.backtest.costs import CostModel
 from src.backtest.portfolio import Portfolio
 from src.backtest.strategies import Action, Strategy
 from src.data.fundamentals import ValuationSnapshot
@@ -60,6 +61,10 @@ class BacktestConfig:
     # decision date (e.g. S&P 500 as-of). When None, the static `universe` is used
     # for every date (backward compatible).
     universe_loader: UniverseLoader | None = None
+    # Transaction costs applied to every fill, for ALL strategies (the multi-agent
+    # system and the baselines pay the same costs — a fair, after-friction fight).
+    # None = frictionless (backward compatible).
+    cost_model: CostModel | None = None
 
     def universe_at(self, date: str) -> list[str]:
         return self.universe_loader(date) if self.universe_loader is not None else self.universe
@@ -117,6 +122,7 @@ async def run_backtest(
             portfolio=Portfolio(
                 initial_cash=config.initial_cash,
                 max_positions=s.max_positions,
+                cost_model=config.cost_model,
             ),
             decisions=[],
         )

@@ -37,6 +37,7 @@ from src.agents.sentiment_specialist import SUMMARY_VERSION, FilingSummaryCache
 from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.batch import BatchLLM
 from src.backtest.cache import SignalCache
+from src.backtest.costs import CostModel
 from src.backtest.metrics import StrategyMetrics, compute_metrics
 from src.backtest.replay import BacktestConfig, BacktestResult, run_backtest
 from src.backtest.strategies import (
@@ -154,6 +155,7 @@ async def run(
     use_batch: bool = False,
     signal_versions: dict[str, str] | None = None,
     summary_version: str | None = None,
+    cost_model: CostModel | None = None,
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
@@ -188,6 +190,7 @@ async def run(
             summary_version=summary_version,
         ),
         universe_loader=universe_loader,
+        cost_model=cost_model,
     )
     return await run_backtest(
         config,
@@ -256,6 +259,8 @@ def print_summary(result: BacktestResult) -> None:
 
     print("\n" + "=" * 72)
     print("BACKTEST VALIDATION SUMMARY")
+    costs = result.config.cost_model or CostModel()
+    print(f"transaction costs: {costs.describe()}")
     print("=" * 72)
     header = (
         f"{'strategy':<14}{'total':>9}{'sharpe':>9}{'maxDD':>9}"
@@ -339,7 +344,27 @@ def main() -> None:
              "(coalesced, ~50%% cheaper, no per-minute throttle). Recommended for "
              "the full S&P 500 run, especially with --sentiment.",
     )
+    # Transaction costs (applied to every fill, all strategies). Defaults model a
+    # liquid-large-cap retail account: 5bps adverse slippage per side (~10bps
+    # round-trip), zero commission (zero-commission-broker era). SWEEP these to test
+    # whether the edge survives friction (productization GATE 0). --slippage-bps 0
+    # --commission-bps 0 reproduces the old frictionless results.
+    parser.add_argument("--slippage-bps", type=float, default=5.0,
+                        help="Adverse slippage per fill, basis points (default 5).")
+    parser.add_argument("--commission-bps", type=float, default=0.0,
+                        help="Commission as bps of notional (default 0).")
+    parser.add_argument("--commission-per-share", type=float, default=0.0,
+                        help="Commission per share in dollars (default 0).")
+    parser.add_argument("--min-commission", type=float, default=0.0,
+                        help="Per-order commission floor in dollars (default 0).")
     args = parser.parse_args()
+
+    cost_model = CostModel(
+        commission_bps=args.commission_bps,
+        commission_per_share=args.commission_per_share,
+        min_commission=args.min_commission,
+        slippage_bps=args.slippage_bps,
+    )
 
     # Per-kind overrides; kinds left unset fall back to --version in SignalCache.
     signal_versions = {
@@ -358,12 +383,13 @@ def main() -> None:
     overrides = f" overrides={signal_versions}" if signal_versions else ""
     logger.info(
         f"Backtest: {scope}{sent}{mode} x {len(args.dates)} dates, "
-        f"cache version={args.version}{overrides}"
+        f"cache version={args.version}{overrides} | costs: {cost_model.describe()}"
     )
     result = asyncio.run(
         run(args.tickers, args.dates, args.version, args.sp500,
             args.screen_lookback_days, args.sentiment, args.batch,
-            signal_versions=signal_versions or None, summary_version=args.summary_version)
+            signal_versions=signal_versions or None, summary_version=args.summary_version,
+            cost_model=cost_model)
     )
     print_summary(result)
 
