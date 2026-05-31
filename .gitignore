@@ -20,3 +20,6 @@ data/reference/
 
 # Local working notes (not shared)
 _plans/
+
+# Local experiment run log (multiple-testing discipline; persists locally, not shared)
+data/experiments/

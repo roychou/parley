@@ -142,6 +142,61 @@ def compute_metrics(
     )
 
 
+@dataclass(frozen=True)
+class AlphaBeta:
+    """CAPM-style decomposition of a strategy's returns against the market (SPY)."""
+    alpha_annualized: float  # intercept (excess not explained by the market), annualized
+    beta: float              # market exposure (1.0 = moves with SPY)
+    r_squared: float         # fraction of the strategy's variance the market explains
+    n_periods: int
+
+
+def alpha_beta(
+    strategy_curve: list[EquitySnapshot],
+    market_curve: list[EquitySnapshot],
+    periods_per_year: int = 252,
+) -> AlphaBeta:
+    """Regress the strategy's periodic returns on the market's (OLS).
+
+    The decisive question for a long-only large-cap strategy: is the return *alpha*
+    (skill) or just *beta* (levered market exposure)? High beta + ~zero alpha means
+    "you reinvented an index fund with extra steps." Alpha is annualized arithmetically
+    (× periods_per_year), consistent with the Sharpe convention here.
+    """
+    s = {snap.date: snap.total_value for snap in strategy_curve}
+    m = {snap.date: snap.total_value for snap in market_curve}
+    dates = sorted(s.keys() & m.keys())
+    s_ret, m_ret = [], []
+    for i in range(1, len(dates)):
+        ps, cs = s[dates[i - 1]], s[dates[i]]
+        pm, cm = m[dates[i - 1]], m[dates[i]]
+        if ps and pm:
+            s_ret.append((cs - ps) / ps)
+            m_ret.append((cm - pm) / pm)
+    n = len(s_ret)
+    if n < 2:
+        return AlphaBeta(0.0, 0.0, 0.0, n)
+
+    mean_s = sum(s_ret) / n
+    mean_m = sum(m_ret) / n
+    var_m = sum((r - mean_m) ** 2 for r in m_ret) / (n - 1)
+    if var_m == 0:
+        return AlphaBeta(0.0, 0.0, 0.0, n)
+    cov = sum((s_ret[i] - mean_s) * (m_ret[i] - mean_m) for i in range(n)) / (n - 1)
+    beta = cov / var_m
+    alpha_period = mean_s - beta * mean_m
+
+    var_s = sum((r - mean_s) ** 2 for r in s_ret) / (n - 1)
+    r_squared = (cov * cov) / (var_m * var_s) if var_s > 0 else 0.0
+
+    return AlphaBeta(
+        alpha_annualized=alpha_period * periods_per_year,
+        beta=beta,
+        r_squared=r_squared,
+        n_periods=n,
+    )
+
+
 def _years_between(start_date_str: str, end_date_str: str) -> float:
     """Calendar years between two YYYY-MM-DD date strings."""
     start = date.fromisoformat(start_date_str)

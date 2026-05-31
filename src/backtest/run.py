@@ -38,9 +38,9 @@ from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.batch import BatchLLM
 from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
-from src.backtest.validation import choose_split_date, print_walk_forward
-from src.backtest.metrics import StrategyMetrics, compute_metrics
+from src.backtest.metrics import StrategyMetrics, alpha_beta, compute_metrics
 from src.backtest.replay import BacktestConfig, BacktestResult, run_backtest
+from src.backtest.runlog import log_run
 from src.backtest.strategies import (
     MultiAgentStrategy,
     PERankingStrategy,
@@ -48,6 +48,7 @@ from src.backtest.strategies import (
     RSIStrategy,
     SPYHoldStrategy,
 )
+from src.backtest.validation import choose_split_date, print_walk_forward
 from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
@@ -284,6 +285,19 @@ def print_summary(result: BacktestResult) -> None:
             f"{m.num_trades:>8}{_fmt_pct(m.excess_return_vs_spy):>9}"
         )
 
+    # Alpha vs. beta: is the return skill or just market exposure? (Skips SPY itself,
+    # which is beta=1/alpha=0 by definition.)
+    if spy_curve:
+        print("-" * 72)
+        print(f"{'alpha/beta vs SPY':<14}{'beta':>9}{'alpha(ann)':>12}{'R^2':>8}{'periods':>9}")
+        for name, outcome in result.outcomes.items():
+            if name == "spy_hold":
+                continue
+            ab = alpha_beta(outcome.portfolio.equity_curve, spy_curve,
+                            periods_per_year=result.config.periods_per_year)
+            print(f"{name:<14}{ab.beta:>9.2f}{_fmt_pct(ab.alpha_annualized):>12}"
+                  f"{ab.r_squared:>8.2f}{ab.n_periods:>9}")
+
     # Decision audit: surface the direction distribution. (HOLDs produce no
     # trades but are still decisions — the thing that surprised us before.)
     ma = result.outcomes.get("multi_agent")
@@ -375,6 +389,10 @@ def main() -> None:
         help="Alternative to --oos-split: train fraction (e.g. 0.6) — the split date "
              "is taken from the decision schedule.",
     )
+    parser.add_argument("--run-note", default=None,
+                        help="Annotate this run in the experiment log (what you changed/why).")
+    parser.add_argument("--no-runlog", action="store_true",
+                        help="Skip appending to the experiment run log.")
     args = parser.parse_args()
 
     cost_model = CostModel(
@@ -415,6 +433,22 @@ def main() -> None:
     if args.oos_split or args.oos_frac is not None:
         split = args.oos_split or choose_split_date(sorted(args.dates), args.oos_frac)
         print_walk_forward(result, split)
+
+    # Multiple-testing discipline: record this run (config + headline metrics) so the
+    # count of variants behind any "edge" stays visible.
+    if not args.no_runlog:
+        config_summary = {
+            "universe": "sp500" if args.sp500 else "watchlist",
+            "n_dates": len(args.dates), "first": min(args.dates), "last": max(args.dates),
+            "sentiment": args.sentiment, "batch": args.batch,
+            "version": args.version, "signal_versions": signal_versions or None,
+            "summary_version": args.summary_version,
+            "screen_lookback_days": args.screen_lookback_days,
+            "costs": cost_model.describe(),
+            "oos_split": args.oos_split, "oos_frac": args.oos_frac,
+        }
+        n = log_run(result, config_summary, note=args.run_note)
+        logger.info(f"logged to experiment runlog as run #{n} ({n} variants recorded)")
 
 
 if __name__ == "__main__":

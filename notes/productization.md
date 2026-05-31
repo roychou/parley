@@ -82,13 +82,19 @@ significance floor (`MIN_MEANINGFUL_BETS=30`). The protocol is procedural: tune 
 in-sample, judge on the OOS window you commit NOT to touch. *Single split is the
 MVP; rolling multi-fold walk-forward is the future extension.*
 
-0.4 **Multiple-testing discipline.** Log every variant tried; report the edge with
-that count in mind. Resist tuning synthesis until Sharpe looks good — that *is*
-the overfit.
+0.4 **Multiple-testing discipline.** ✅ **DONE (31 May 2026).**
+`src/backtest/runlog.py` appends one record per run (config + git state + headline
+metrics + optional `--run-note`) to `data/experiments/runlog.jsonl`, and reports the
+running count — so the number of variants behind any "edge" stays visible. Procedural,
+not statistical: pair it with the 0.3 OOS split. (`--no-runlog` to skip.)
 
-0.5 **Capacity & alpha-vs-beta.** Quantify how much of the return is just market
-beta. For long-only large-cap, the honest question is whether *any* alpha remains
-after 0.1. Estimate strategy capacity (how much capital before impact eats it).
+0.5 **Capacity & alpha-vs-beta.** ✅ **alpha/beta DONE (31 May 2026).**
+`metrics.alpha_beta` regresses strategy returns on SPY (CAPM-style): reports beta,
+annualized alpha, R², and n — the decisive "is it skill or levered beta?" test,
+shown per strategy in the summary. **Capacity:** non-binding at personal-account
+scale (a $10k position in a $100M+/day-ADV large-cap is ~0.01% participation — no
+impact), so deferred; revisit with an ADV-participation + market-impact model only if
+capital grows large (ties to the impact term left out of `CostModel`).
 
 > **GATE 0 (the honest gate):** Over a walk-forward window, *after costs and
 > dividends*, the system shows a **statistically credible** excess return vs.
