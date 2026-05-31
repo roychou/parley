@@ -71,6 +71,12 @@ Crucially, this is a **different axis** from 0.3's split (which is in-/out-of-sa
 relative to *our tuning*). A 2024→2026 walk-forward is entirely inside the model's
 knowledge — every fold is contaminated. The two axes are independent; you need both.
 
+**Built so far (31 May 2026):** `src/backtest/temporal.py` + `--model-cutoff` /
+`--clean-only` operationalize the split — the runner reports clean vs. contaminated
+decision dates, warns loudly when results are contaminated (engineering validation,
+not edge), and `--clean-only` restricts to the post-cutoff window. *Still open:* verify
+the actual model cutoffs, the anonymization probe, and forward paper trading.
+
 What a *clean* test actually requires:
 - **Post-cutoff window only** — restrict decision dates to *after* the specialist
   models' training cutoff (~late-2025 → our May-2026 data edge). The only

@@ -48,6 +48,7 @@ from src.backtest.strategies import (
     RSIStrategy,
     SPYHoldStrategy,
 )
+from src.backtest.temporal import report_and_filter
 from src.backtest.validation import choose_split_date, print_walk_forward
 from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
@@ -393,7 +394,22 @@ def main() -> None:
                         help="Annotate this run in the experiment log (what you changed/why).")
     parser.add_argument("--no-runlog", action="store_true",
                         help="Skip appending to the experiment run log.")
+    parser.add_argument(
+        "--model-cutoff", default=None,
+        help="Specialist models' training cutoff (YYYY-MM-DD). Decision dates after it "
+             "are temporally clean; on/before are contaminated by training memory. "
+             "VERIFY per model. Unset = all results are engineering validation only.",
+    )
+    parser.add_argument(
+        "--clean-only", action="store_true",
+        help="Restrict the run to post-cutoff (temporally valid) decision dates. "
+             "Requires --model-cutoff.",
+    )
     args = parser.parse_args()
+
+    # Temporal-validity gate (productization.md 0.0): report the contamination split
+    # and, with --clean-only, restrict to the post-cutoff window before running.
+    dates = report_and_filter(sorted(args.dates), args.model_cutoff, args.clean_only)
 
     cost_model = CostModel(
         commission_bps=args.commission_bps,
@@ -418,12 +434,13 @@ def main() -> None:
     sent = " + sentiment" if args.sentiment else ""
     mode = " [batch]" if args.batch else ""
     overrides = f" overrides={signal_versions}" if signal_versions else ""
+    clean_tag = " [clean-only]" if args.clean_only else ""
     logger.info(
-        f"Backtest: {scope}{sent}{mode} x {len(args.dates)} dates, "
+        f"Backtest: {scope}{sent}{mode}{clean_tag} x {len(dates)} dates, "
         f"cache version={args.version}{overrides} | costs: {cost_model.describe()}"
     )
     result = asyncio.run(
-        run(args.tickers, args.dates, args.version, args.sp500,
+        run(args.tickers, dates, args.version, args.sp500,
             args.screen_lookback_days, args.sentiment, args.batch,
             signal_versions=signal_versions or None, summary_version=args.summary_version,
             cost_model=cost_model)
@@ -431,7 +448,7 @@ def main() -> None:
     print_summary(result)
 
     if args.oos_split or args.oos_frac is not None:
-        split = args.oos_split or choose_split_date(sorted(args.dates), args.oos_frac)
+        split = args.oos_split or choose_split_date(dates, args.oos_frac)
         print_walk_forward(result, split)
 
     # Multiple-testing discipline: record this run (config + headline metrics) so the
@@ -439,12 +456,13 @@ def main() -> None:
     if not args.no_runlog:
         config_summary = {
             "universe": "sp500" if args.sp500 else "watchlist",
-            "n_dates": len(args.dates), "first": min(args.dates), "last": max(args.dates),
+            "n_dates": len(dates), "first": min(dates), "last": max(dates),
             "sentiment": args.sentiment, "batch": args.batch,
             "version": args.version, "signal_versions": signal_versions or None,
             "summary_version": args.summary_version,
             "screen_lookback_days": args.screen_lookback_days,
             "costs": cost_model.describe(),
+            "model_cutoff": args.model_cutoff, "clean_only": args.clean_only,
             "oos_split": args.oos_split, "oos_frac": args.oos_frac,
         }
         n = log_run(result, config_summary, note=args.run_note)
