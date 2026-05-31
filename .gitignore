@@ -23,3 +23,6 @@ _plans/
 
 # Local experiment run log (multiple-testing discipline; persists locally, not shared)
 data/experiments/
+
+# Forward paper-trading book (local, persistent track record)
+data/forward/
