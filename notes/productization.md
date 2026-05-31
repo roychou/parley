@@ -175,6 +175,50 @@ capital grows large (ties to the impact term left out of `CostModel`).
 
 ---
 
+## Forward paper-trading harness — BUILD STATUS (as of 31 May 2026)
+
+Forward paper trading is GATE 0's only clean evaluation (every decision is on
+post-cutoff, unseen data) and it accrues only with calendar time — so the harness is
+being built to start the clock ASAP. **Vendor: IBKR** (data + free Benzinga news +
+later execution; Singapore-resident, Alpaca not available). **Cadence: weekly,
+point-in-time** — the intraday/real-time pivot was considered and rejected (an LLM's
+seconds-latency can't win the speed game; its edge is slow synthesis — see the
+"contemplating the pivot" discussion). Deploys laptop-first (weekly job, minutes);
+persistent infra (VM + IBC + cron) only when going real-money.
+
+**Built + tested (vendor-agnostic parts fully; IBKR IO mock-tested only):**
+- `src/forward/paper.py` — `PaperBook` (JSON-persisted account: cash, positions,
+  trades, equity, dividends, decision log) + `run_forward_step` (dividends → MTM →
+  translate+execute), reusing `Portfolio` and the multi-agent sizing.
+- `src/forward/decide.py` — `run_forward_decision`: fundamentals + technicals +
+  sentiment + **news** → `synthesize`. Forward-only news; **news is an explicit
+  toggle for the on/off ablation** (let the live record decide if news earns its keep).
+- `src/forward/session.py` — `run_forward_session`: screen → decide → execute →
+  persist for one date. The harness the adapters plug into.
+- `src/agents/news_specialist.py` — news specialist (`NewsAnalysis`) +
+  `combine_news_sources` (multi-source merge; curated feeds only, no open-social).
+- `src/forward/ibkr.py` — IBKR **price** (`refresh_price_cache`) + **news**
+  (`fetch_news_for` + `news_source_from_store`) adapters, refresh/ingest pattern,
+  host/port-configurable (env). Pure converters unit-tested; **ib_async IO needs LIVE
+  validation against a Gateway (CI has none).**
+- LLM **spend cap** (`--max-llm-usd`, `src/backtest/budget.py`) — added after a
+  validation run overran to ~$120; aborts at the cap, resumes from the warm cache.
+
+**Remaining to run forward (data-only, no execution yet):**
+1. **Wiring entrypoint** — connect → refresh prices/news for candidates →
+   `run_forward_session` with cost-cap → disconnect (a weekly command). *Live-testable
+   only with a Gateway, so deferred until the operator stands one up.*
+2. **Operator setup** — IB Gateway (paper) + US market-data subscription (~$10/mo) +
+   Anthropic credits topped up.
+3. **Later** — IBKR **execution** adapter (place paper orders) + scheduler (cron/launchd).
+
+**Immediate next step (next session):** operator spins up IB Gateway (paper) + data
+sub; then build the wiring entrypoint and **validate the IBKR price/news adapters live
+on a couple of tickers**, then start the weekly forward clock (with the news on/off
+ablation running from day one).
+
+---
+
 ## Phase 1 — Risk management layer
 
 *Goal: a layer between synthesis and execution that owns capital preservation.
@@ -202,8 +246,10 @@ target alpha / market-neutrality. Drives universe and sizing. *Open decision.*
 
 *Goal: survive contact with a real broker before real capital.*
 
-2.1 **Broker integration** — Alpaca or IBKR; order management (partial fills,
-halts, market hours), corporate-actions handling.
+2.1 **Broker integration** — **IBKR chosen** (Singapore; Alpaca needs US residency).
+Data adapters (price + news) **built** (`src/forward/ibkr.py`, refresh/ingest, via
+`ib_async`); **execution adapter remains** — order management (partial fills, halts,
+market hours), corporate-actions handling. All pending live Gateway validation.
 2.2 **Paper trading for a meaningful period** (months). Reconcile paper fills vs.
 backtest assumptions — this is where hidden look-ahead and cost optimism surface.
 2.3 **Reconciliation** — does my modeled book match the broker's, every day?
