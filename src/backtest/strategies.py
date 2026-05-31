@@ -38,6 +38,7 @@ _FATAL_ERROR_MARKERS = (
     "authentication",        # bad/expired key
     "permission",            # permission denied
     "x-api-key", "api key",  # missing/invalid key
+    "budget cap",            # our own LLM spend cap (budget.BudgetExceeded)
 )
 
 

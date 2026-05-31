@@ -36,6 +36,7 @@ from src.agents.scaffold import ScaffoldConfig
 from src.agents.sentiment_specialist import SUMMARY_VERSION, FilingSummaryCache
 from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.batch import BatchLLM
+from src.backtest.budget import BudgetedMessages, BudgetMeter
 from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
 from src.backtest.metrics import StrategyMetrics, alpha_beta, compute_metrics
@@ -91,6 +92,7 @@ def build_strategies(
     signal_versions: dict[str, str] | None = None,
     summary_version: str | None = None,
     anonymize: bool = False,
+    max_llm_usd: float | None = None,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -117,7 +119,15 @@ def build_strategies(
         SIGNAL_CACHE_DIR, versions=signal_versions, default_version=cache_version
     )
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
-    messages_api = BatchLLM(client) if use_batch else None
+    # A budget cap wraps the message API so all specialist spend (across every ticker
+    # and date) accrues to one meter and aborts the run when the cap trips. Without a
+    # cap, preserve prior behavior (None -> supervisor uses client.messages directly).
+    base_mc = BatchLLM(client) if use_batch else client.messages
+    if max_llm_usd is not None:
+        meter = BudgetMeter(max_llm_usd, batch_discount=0.5 if use_batch else 1.0)
+        messages_api = BudgetedMessages(base_mc, meter)
+    else:
+        messages_api = BatchLLM(client) if use_batch else None
     scaffold_config = ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None
     # Per-filing summary cache (keyed by accession) — reused across decision dates,
     # quarters, and tickers, halving the sentiment scaffold's map-reduce cost.
@@ -162,6 +172,7 @@ async def run(
     summary_version: str | None = None,
     cost_model: CostModel | None = None,
     anonymize: bool = False,
+    max_llm_usd: float | None = None,
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # Anonymized signals must not collide with named ones in the cache — namespace them.
@@ -198,6 +209,7 @@ async def run(
             signal_versions=signal_versions,
             summary_version=summary_version,
             anonymize=anonymize,
+            max_llm_usd=max_llm_usd,
         ),
         universe_loader=universe_loader,
         cost_model=cost_model,
@@ -419,7 +431,19 @@ def main() -> None:
              "to size the training-memory gap. Sentiment is force-disabled (filing text "
              "self-identifies); signals cache under a separate '-anon' version.",
     )
+    parser.add_argument(
+        "--max-llm-usd", type=float, default=None,
+        help="Hard cap on estimated LLM spend for this run (USD). Aborts when crossed; "
+             "computed signals are cached, so raise the cap and re-run to resume. "
+             "STRONGLY recommended for any --sp500 run.",
+    )
     args = parser.parse_args()
+
+    if args.sp500 and args.max_llm_usd is None:
+        logger.warning(
+            "No --max-llm-usd cap set on an sp500 run. A full-index run can cost $100+; "
+            "set a cap to fail safe (the cache makes it resumable)."
+        )
 
     if args.anonymize and args.sentiment:
         logger.warning(
@@ -464,7 +488,7 @@ def main() -> None:
         run(args.tickers, dates, args.version, args.sp500,
             args.screen_lookback_days, args.sentiment, args.batch,
             signal_versions=signal_versions or None, summary_version=args.summary_version,
-            cost_model=cost_model, anonymize=args.anonymize)
+            cost_model=cost_model, anonymize=args.anonymize, max_llm_usd=args.max_llm_usd)
     )
     print_summary(result)
 
@@ -484,7 +508,7 @@ def main() -> None:
             "screen_lookback_days": args.screen_lookback_days,
             "costs": cost_model.describe(),
             "model_cutoff": args.model_cutoff, "clean_only": args.clean_only,
-            "anonymize": args.anonymize,
+            "anonymize": args.anonymize, "max_llm_usd": args.max_llm_usd,
             "oos_split": args.oos_split, "oos_frac": args.oos_frac,
         }
         n = log_run(result, config_summary, note=args.run_note)
