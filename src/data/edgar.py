@@ -46,10 +46,14 @@ CACHE_DIR = Path("data/cache/edgar")
 REF_DIR = Path("data/reference")
 
 # Revenue is tagged differently across eras/filers — try in priority order.
+# (Energy/utility filers like APA report gross "IncludingAssessedTax"; without it
+# their revenue extraction yields zero quarters and the whole name silently drops.)
 REVENUE_CONCEPTS = [
     "RevenueFromContractWithCustomerExcludingAssessedTax",
     "Revenues",
     "SalesRevenueNet",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "RevenuesNetOfInterestExpense",  # bank/broker presentation
 ]
 # Total debt: prefer the combined tag; fall back to current + noncurrent components.
 DEBT_TOTAL_CONCEPTS = ["LongTermDebt", "DebtLongtermAndShorttermCombinedAmount"]
