@@ -68,11 +68,11 @@ async def test_fundamentals_reused_same_band_technicals_recompute(monkeypatch, t
     fund_calls: list[str] = []
     tech_calls: list[str] = []
 
-    async def fake_fundamentals(client, ticker, as_of, data):
+    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False):
         fund_calls.append(as_of)
         return _fund_analysis()
 
-    async def fake_technicals(client, ticker, as_of, data):
+    async def fake_technicals(client, ticker, as_of, data, anonymize=False):
         tech_calls.append(as_of)
         return _tech_analysis()
 
@@ -110,11 +110,11 @@ async def test_fundamentals_recompute_when_pe_crosses_band(monkeypatch, tmp_path
     """When P/E crosses a band boundary the fundamentals signal is recomputed."""
     fund_calls: list[str] = []
 
-    async def fake_fundamentals(client, ticker, as_of, data):
+    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False):
         fund_calls.append(as_of)
         return _fund_analysis()
 
-    async def fake_technicals(client, ticker, as_of, data):
+    async def fake_technicals(client, ticker, as_of, data, anonymize=False):
         return _tech_analysis()
 
     monkeypatch.setattr(bsup, "_call_fundamentals_with_data", fake_fundamentals)
@@ -145,10 +145,10 @@ async def test_fundamentals_recompute_when_pe_crosses_band(monkeypatch, tmp_path
 
 
 def _patch_specialist_calls(monkeypatch):
-    async def fake_fundamentals(client, ticker, as_of, data):
+    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False):
         return _fund_analysis()
 
-    async def fake_technicals(client, ticker, as_of, data):
+    async def fake_technicals(client, ticker, as_of, data, anonymize=False):
         return _tech_analysis()
 
     monkeypatch.setattr(bsup, "_call_fundamentals_with_data", fake_fundamentals)
@@ -214,3 +214,77 @@ async def test_sentiment_off_by_default(monkeypatch, tmp_path):
         signal_cache=SignalCache(tmp_path),
     )
     assert {s.specialist for s in decision.contributing_signals} == {"fundamentals", "technicals"}
+
+
+# ==========================================
+# anonymization probe (contamination measurement)
+# ==========================================
+
+
+def test_analyze_directive_named_vs_anonymized():
+    data = {"pe_ratio": 18.0, "report_date": "2025-07-30", "price_date": "2026-01-09",
+            "period_end_date": "2025-06-30", "diluted_eps": 10.0}
+    named_dir, named_data = bsup._analyze_directive(
+        "AAPL", "2026-01-09", dict(data), anonymize=False
+    )
+    assert "AAPL" in named_dir and "2026-01-09" in named_dir
+    assert named_data == data  # untouched
+
+    anon_dir, anon_data = bsup._analyze_directive("AAPL", "2026-01-09", dict(data), anonymize=True)
+    assert "AAPL" not in anon_dir and "2026-01-09" not in anon_dir
+    # date-bearing keys stripped; numeric figures retained
+    assert "report_date" not in anon_data and "price_date" not in anon_data
+    assert "period_end_date" not in anon_data
+    assert anon_data["pe_ratio"] == 18.0 and anon_data["diluted_eps"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_anonymized_run_skips_sentiment_and_restores_identity(monkeypatch, tmp_path):
+    seen_prompts: list[str] = []
+
+    async def fake_create(**kw):
+        seen_prompts.append(kw["messages"][0]["content"])
+        # echo a minimal valid FundamentalsAnalysis/TechnicalsAnalysis via the tool
+        name = kw["tools"][0]["name"]
+        is_fund = "Fundamentals" in kw["tools"][0]["description"]
+        payload = (dict(specialist="fundamentals", ticker="WRONG", signal="BULLISH",
+                        confidence=0.7, reasoning=_REASONING, as_of="WRONG",
+                        rev_growth_yoy=0.1, pe_ratio=18.0, profit_margin=0.2, debt_to_equity=0.5)
+                   if is_fund else
+                   dict(specialist="technicals", ticker="WRONG", signal="NEUTRAL",
+                        confidence=0.5, reasoning=_REASONING, as_of="WRONG",
+                        current_price=100.0, sma_20=98.0, rsi_14=55.0))
+
+        class _B:
+            type = "tool_use"
+            def __init__(self):
+                self.name, self.input = name, payload
+
+        class _U:
+            input_tokens = output_tokens = 1
+
+        class _R:
+            content = [_B()]
+            usage = _U()
+        return _R()
+
+    class _MC:
+        async def create(self, **kw):
+            return await fake_create(**kw)
+
+    # current_filing_key would add sentiment; assert it's never consulted under anonymize
+    monkeypatch.setattr(bsup, "current_filing_key",
+                        lambda t, a: (_ for _ in ()).throw(AssertionError("sentiment under anon")))
+
+    decision = await bsup.run_backtest_supervisor(
+        client=None, ticker="AAPL", as_of="2026-01-09",
+        fundamentals_loader=lambda t, d: _val_snapshot(20.0),
+        technicals_loader=lambda t, d: _tech_snapshot(d),
+        signal_cache=SignalCache(tmp_path), include_sentiment=True,
+        messages_api=_MC(), anonymize=True,
+    )
+    # identity stripped from prompts, restored on the signals
+    assert all("AAPL" not in p for p in seen_prompts)
+    specialists = {s.specialist for s in decision.contributing_signals}
+    assert specialists == {"fundamentals", "technicals"}  # sentiment skipped
+    assert all(s.ticker == "AAPL" for s in decision.contributing_signals)  # restored

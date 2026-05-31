@@ -90,6 +90,7 @@ def build_strategies(
     technicals_loader=None,
     signal_versions: dict[str, str] | None = None,
     summary_version: str | None = None,
+    anonymize: bool = False,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -133,7 +134,7 @@ def build_strategies(
         run_backtest_supervisor, client,
         signal_cache=signal_cache, include_sentiment=include_sentiment,
         messages_api=messages_api, scaffold_config=scaffold_config,
-        summary_cache=summary_cache,
+        summary_cache=summary_cache, anonymize=anonymize,
         **loader_kwargs,
     )
     return [
@@ -160,8 +161,12 @@ async def run(
     signal_versions: dict[str, str] | None = None,
     summary_version: str | None = None,
     cost_model: CostModel | None = None,
+    anonymize: bool = False,
 ) -> BacktestResult:
     client = AsyncAnthropic()
+    # Anonymized signals must not collide with named ones in the cache — namespace them.
+    if anonymize:
+        cache_version = f"{cache_version}-anon"
     # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
     # (mandatory at ~500 names), run offline against the deep ("max") grabbed price
     # cache — coverage-filtered so a name with no cached prices is dropped rather
@@ -192,6 +197,7 @@ async def run(
             technicals_loader=technicals_loader,
             signal_versions=signal_versions,
             summary_version=summary_version,
+            anonymize=anonymize,
         ),
         universe_loader=universe_loader,
         cost_model=cost_model,
@@ -405,7 +411,21 @@ def main() -> None:
         help="Restrict the run to post-cutoff (temporally valid) decision dates. "
              "Requires --model-cutoff.",
     )
+    parser.add_argument(
+        "--anonymize", action="store_true",
+        help="Contamination probe: strip ticker + dates from the numeric specialists "
+             "so they reason from figures alone. Run named vs --anonymize and compare "
+             "to size the training-memory gap. Sentiment is force-disabled (filing text "
+             "self-identifies); signals cache under a separate '-anon' version.",
+    )
     args = parser.parse_args()
+
+    if args.anonymize and args.sentiment:
+        logger.warning(
+            "--anonymize forces --sentiment off: filing narrative names the company and "
+            "cannot be anonymized. Running numeric specialists only."
+        )
+        args.sentiment = False
 
     # Temporal-validity gate (productization.md 0.0): report the contamination split
     # and, with --clean-only, restrict to the post-cutoff window before running.
@@ -443,7 +463,7 @@ def main() -> None:
         run(args.tickers, dates, args.version, args.sp500,
             args.screen_lookback_days, args.sentiment, args.batch,
             signal_versions=signal_versions or None, summary_version=args.summary_version,
-            cost_model=cost_model)
+            cost_model=cost_model, anonymize=args.anonymize)
     )
     print_summary(result)
 
@@ -463,6 +483,7 @@ def main() -> None:
             "screen_lookback_days": args.screen_lookback_days,
             "costs": cost_model.describe(),
             "model_cutoff": args.model_cutoff, "clean_only": args.clean_only,
+            "anonymize": args.anonymize,
             "oos_split": args.oos_split, "oos_frac": args.oos_frac,
         }
         n = log_run(result, config_summary, note=args.run_note)

@@ -80,6 +80,7 @@ async def run_backtest_supervisor(
     messages_api: MessageCreator | None = None,
     scaffold_config: ScaffoldConfig | None = None,
     summary_cache: FilingSummaryCache | None = None,
+    anonymize: bool = False,
 ) -> Decision:
     """Produce a Decision for (ticker, as_of) using point-in-time data and the real LLM.
 
@@ -113,18 +114,20 @@ async def run_backtest_supervisor(
     coros = [
         cached_signal(
             signal_cache, "fundamentals", ticker, fundamentals_key, FundamentalsAnalysis,
-            lambda: _call_fundamentals_with_data(mc, ticker, as_of, fundamentals_data),
+            lambda: _call_fundamentals_with_data(mc, ticker, as_of, fundamentals_data, anonymize),
         ),
         cached_signal(
             signal_cache, "technicals", ticker, as_of, TechnicalsAnalysis,
-            lambda: _call_technicals_with_data(mc, ticker, as_of, technicals_data),
+            lambda: _call_technicals_with_data(mc, ticker, as_of, technicals_data, anonymize),
         ),
     ]
     # Sentiment (optional): keyed by the current filing accession, so it's reused
     # across decision dates until a new filing. Skipped when no filing is available
     # as of the date (e.g. delisted names with no current CIK) — its absence just
-    # drops one vote from synthesis.
-    if include_sentiment:
+    # drops one vote from synthesis. Also skipped under anonymization: the filing
+    # narrative names the company/products/execs, so it cannot be anonymized (it's
+    # the most contaminated, least-anonymizable specialist — see productization.md 0.0).
+    if include_sentiment and not anonymize:
         sentiment_key = current_filing_key(ticker, as_of)
         if sentiment_key:
             coros.append(cached_signal(
@@ -142,16 +145,41 @@ async def run_backtest_supervisor(
 # SPECIALIST CALLS (data-injected, single-turn)
 # ==========================================
 
+# Date-bearing keys stripped under anonymization — they'd let the model pin the
+# (ticker, period) and recall what happened next. (See _analyze_directive.)
+_DATE_FIELDS = frozenset({"price_date", "report_date", "period_end_date", "as_of", "date_range"})
+
+
+def _analyze_directive(
+    ticker: str, as_of: str, data_dict: dict, anonymize: bool
+) -> tuple[str, dict]:
+    """The (instruction line, data dict) for a specialist prompt.
+
+    anonymize is the contamination probe (productization.md 0.0): withhold the
+    ticker and all dates so the model must reason from the figures alone, not from
+    its memory of what this name did. Residual leak: absolute price levels remain.
+    """
+    if not anonymize:
+        return f"Analyze {ticker} as of {as_of}.", data_dict
+    stripped = {k: v for k, v in data_dict.items() if k not in _DATE_FIELDS}
+    directive = (
+        "Analyze the company below. Its identity and the dates are withheld "
+        "deliberately — reason ONLY from the figures, not from any guess about which "
+        "company or period this is."
+    )
+    return directive, stripped
+
 
 async def _call_fundamentals_with_data(
     messages_api: MessageCreator,
     ticker: str,
     as_of: str,
     data: ValuationSnapshot,
+    anonymize: bool = False,
 ) -> FundamentalsAnalysis:
-    data_dict = asdict(data)
+    directive, data_dict = _analyze_directive(ticker, as_of, asdict(data), anonymize)
     user_prompt = (
-        f"Analyze {ticker} as of {as_of}.\n\n"
+        f"{directive}\n\n"
         "The fundamentals data has already been fetched and is provided below. "
         "Skip the get_fundamentals step in the workflow and proceed directly to "
         "submit_analysis using submit_analysis.\n\n"
@@ -178,7 +206,12 @@ async def _call_fundamentals_with_data(
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_analysis":
-            return FundamentalsAnalysis(**block.input)
+            result = FundamentalsAnalysis(**block.input)
+            # The model never saw the identity under anonymization — restore it for
+            # synthesis/bookkeeping (it doesn't influence the model's judgment).
+            if anonymize:
+                result = result.model_copy(update={"ticker": ticker, "as_of": as_of})
+            return result
 
     raise RuntimeError("Fundamentals specialist did not return a submit_analysis tool_use block")
 
@@ -188,10 +221,11 @@ async def _call_technicals_with_data(
     ticker: str,
     as_of: str,
     data: TechnicalsSnapshot,
+    anonymize: bool = False,
 ) -> TechnicalsAnalysis:
-    data_dict = asdict(data)
+    directive, data_dict = _analyze_directive(ticker, as_of, asdict(data), anonymize)
     user_prompt = (
-        f"Analyze {ticker} as of {as_of}.\n\n"
+        f"{directive}\n\n"
         "The technicals data has already been fetched and is provided below. "
         "Skip the get_technicals step in the workflow and proceed directly to "
         "submit_analysis using submit_analysis.\n\n"
@@ -218,6 +252,9 @@ async def _call_technicals_with_data(
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_analysis":
-            return TechnicalsAnalysis(**block.input)
+            result = TechnicalsAnalysis(**block.input)
+            if anonymize:
+                result = result.model_copy(update={"ticker": ticker, "as_of": as_of})
+            return result
 
     raise RuntimeError("Technicals specialist did not return a submit_analysis tool_use block")

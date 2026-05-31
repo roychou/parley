@@ -71,11 +71,18 @@ Crucially, this is a **different axis** from 0.3's split (which is in-/out-of-sa
 relative to *our tuning*). A 2024→2026 walk-forward is entirely inside the model's
 knowledge — every fold is contaminated. The two axes are independent; you need both.
 
-**Built so far (31 May 2026):** `src/backtest/temporal.py` + `--model-cutoff` /
-`--clean-only` operationalize the split — the runner reports clean vs. contaminated
-decision dates, warns loudly when results are contaminated (engineering validation,
-not edge), and `--clean-only` restricts to the post-cutoff window. *Still open:* verify
-the actual model cutoffs, the anonymization probe, and forward paper trading.
+**Built so far (31 May 2026):**
+- `src/backtest/temporal.py` + `--model-cutoff` / `--clean-only` operationalize the
+  contamination split — the runner reports clean vs. contaminated decision dates, warns
+  loudly when results are contaminated (engineering validation, not edge), and
+  `--clean-only` restricts to the post-cutoff window.
+- **Anonymization probe** (`--anonymize`): strips ticker + all date fields from the
+  numeric specialists (neutral prompt, identity restored on output for bookkeeping) so
+  they reason from figures alone; signals cache under a separate `-anon` version. Run
+  named vs. `--anonymize` and diff the returns to *size the training-memory gap*.
+  Sentiment is force-disabled under it — the filing narrative names the company and
+  can't be anonymized (the most contaminated, least-anonymizable specialist).
+*Still open:* verify the actual model cutoffs, and forward paper trading.
 
 What a *clean* test actually requires:
 - **Post-cutoff window only** — restrict decision dates to *after* the specialist
