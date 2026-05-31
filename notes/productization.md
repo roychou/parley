@@ -73,10 +73,14 @@ our prices are split-adjusted-but-not-div-adjusted (NVDA 10:1, no discontinuity)
 double-count. Equity curve (hence Sharpe/return) is now total-return; summary reports
 dividends received. Off when no loader passed (price-return only) — tests unchanged.
 
-0.3 **Walk-forward / out-of-sample.** A protocol where any threshold or prompt
-tuning happens on a train window and is *measured* on a held-out window. Track
-how many independent bets the result rests on; treat <~50 as "cannot distinguish
-skill from luck."
+0.3 **Walk-forward / out-of-sample.** ✅ **DONE (31 May 2026).**
+`src/backtest/validation.py` slices a single run's equity curve + trades at a split
+date into in-sample (≤) / out-of-sample (>) — equity by snapshot date, trades by
+entry_date (the decision) — and reports metrics per segment (`--oos-split DATE` or
+`--oos-frac`). Surfaces the out-of-sample **bet count** and warns when it's below a
+significance floor (`MIN_MEANINGFUL_BETS=30`). The protocol is procedural: tune on
+in-sample, judge on the OOS window you commit NOT to touch. *Single split is the
+MVP; rolling multi-fold walk-forward is the future extension.*
 
 0.4 **Multiple-testing discipline.** Log every variant tried; report the edge with
 that count in mind. Resist tuning synthesis until Sharpe looks good — that *is*

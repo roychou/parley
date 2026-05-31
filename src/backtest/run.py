@@ -38,6 +38,7 @@ from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.batch import BatchLLM
 from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
+from src.backtest.validation import choose_split_date, print_walk_forward
 from src.backtest.metrics import StrategyMetrics, compute_metrics
 from src.backtest.replay import BacktestConfig, BacktestResult, run_backtest
 from src.backtest.strategies import (
@@ -364,6 +365,16 @@ def main() -> None:
                         help="Per-order commission floor in dollars (default 1.0, IBKR).")
     parser.add_argument("--max-commission-pct", type=float, default=1.0,
                         help="Per-order commission cap as %% of notional (default 1.0, IBKR).")
+    parser.add_argument(
+        "--oos-split", default=None,
+        help="Date (YYYY-MM-DD) splitting in-sample from out-of-sample; prints a "
+             "walk-forward report. The OOS window is what you must NOT tune against.",
+    )
+    parser.add_argument(
+        "--oos-frac", type=float, default=None,
+        help="Alternative to --oos-split: train fraction (e.g. 0.6) — the split date "
+             "is taken from the decision schedule.",
+    )
     args = parser.parse_args()
 
     cost_model = CostModel(
@@ -400,6 +411,10 @@ def main() -> None:
             cost_model=cost_model)
     )
     print_summary(result)
+
+    if args.oos_split or args.oos_frac is not None:
+        split = args.oos_split or choose_split_date(sorted(args.dates), args.oos_frac)
+        print_walk_forward(result, split)
 
 
 if __name__ == "__main__":
