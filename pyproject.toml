@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.97.0",
+    "ib-async>=2.1.0",
     "mcp[cli]>=1.27.0",
     "pandas>=2.2.0",
     "pydantic>=2.13.3",
