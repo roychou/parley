@@ -31,6 +31,21 @@ logger = logging.getLogger(__name__)
 
 DecisionProvider = Callable[[str, str], Awaitable[Decision]]
 
+# Substrings marking a SYSTEMIC failure — one that will recur on every subsequent
+# call (billing/auth), so the run must abort rather than mask it as per-name skips.
+_FATAL_ERROR_MARKERS = (
+    "credit balance",        # out of API credits
+    "authentication",        # bad/expired key
+    "permission",            # permission denied
+    "x-api-key", "api key",  # missing/invalid key
+)
+
+
+def _is_fatal_error(exc: Exception) -> bool:
+    """True for systemic errors (billing/auth) that doom the rest of the run."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _FATAL_ERROR_MARKERS)
+
 
 # ==========================================
 # ACTION
@@ -174,10 +189,12 @@ class MultiAgentStrategy:
         if self.filing_dates_fn is not None:
             universe = self._screen(universe, date, portfolio)
             self._last_decision_date = date
-        # Resilient fan-out: a single candidate that can't be analyzed (e.g. no
-        # point-in-time fundamentals/technicals, or a transient LLM error) must not
-        # abort the whole period at index scale. Skip it (logged) — it simply gets no
-        # decision this date — rather than letting one exception nuke the run.
+        # Resilient fan-out: a single candidate that can't be analyzed (no
+        # point-in-time fundamentals/technicals, or a transient blip) must not abort
+        # the whole period at index scale — skip it (logged), it just gets no decision.
+        # BUT a *systemic* error (exhausted credits, bad auth) affects every remaining
+        # call, so swallowing it as N per-name skips would silently emit a fake summary
+        # over a crippled subset. Those abort the run loudly instead.
         results = await asyncio.gather(
             *[self.decision_provider(ticker, date) for ticker in universe],
             return_exceptions=True,
@@ -185,6 +202,8 @@ class MultiAgentStrategy:
         decisions: list[Decision] = []
         for ticker, result in zip(universe, results):
             if isinstance(result, Exception):
+                if _is_fatal_error(result):
+                    raise result
                 logger.warning(f"skipping {ticker} @ {date}: {type(result).__name__}: {result}")
                 continue
             decisions.append(result)

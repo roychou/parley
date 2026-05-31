@@ -212,6 +212,22 @@ async def test_multiagent_skips_candidate_that_errors():
 
 
 @pytest.mark.asyncio
+async def test_multiagent_aborts_on_fatal_error():
+    """A systemic error (e.g. exhausted credits) must abort the run, not be masked as a
+    per-name skip that yields a fake summary over a crippled subset."""
+    p = Portfolio(initial_cash=100_000)
+
+    async def provider(ticker, date):
+        if ticker == "BBB":
+            raise RuntimeError("Error code: 400 - Your credit balance is too low.")
+        return make_decision(ticker, "BUY", confidence=0.8)
+
+    strat = MultiAgentStrategy(decision_provider=provider)
+    with pytest.raises(RuntimeError, match="credit balance"):
+        await strat.decide_all(["AAA", "BBB", "CCC"], "2026-01-09", {}, {}, p)
+
+
+@pytest.mark.asyncio
 async def test_multiagent_at_max_positions_skips_new_buys():
     p = Portfolio(initial_cash=1_000_000, max_positions=2)
     p.open("AAA", "2026-01-02", price=100.0, dollars=10_000)
