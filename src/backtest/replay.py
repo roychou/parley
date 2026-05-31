@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 PriceLoader = Callable[[str], dict[str, dict]]  # ticker -> {date -> ohlcv dict}
 FundamentalsLoader = Callable[[str, str], ValuationSnapshot | None]  # (ticker, date) -> snapshot or None
 UniverseLoader = Callable[[str], list[str]]  # date -> eligible tickers as of that date
+DividendsLoader = Callable[[str], dict[str, float]]  # ticker -> {ex_date -> div/share}
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ async def run_backtest(
     config: BacktestConfig,
     price_loader: PriceLoader,
     fundamentals_loader: FundamentalsLoader,
+    dividends_loader: DividendsLoader | None = None,
 ) -> BacktestResult:
     """Replay strategies over historical decision dates against a simulated portfolio.
 
@@ -100,6 +102,9 @@ async def run_backtest(
     own point-in-time filtering against `date`.
     fundamentals_loader: returns the latest filing available at `date` (point-in-time
     on filingDate <= date), or None if not available.
+    dividends_loader: returns {ex_date -> split-adjusted div/share} for a ticker.
+    When provided, held positions are credited their dividends on the ex-date
+    (total-return); None = price-return only (backward compatible).
     """
     if not config.decision_dates:
         raise ValueError("decision_dates is empty")
@@ -114,6 +119,12 @@ async def run_backtest(
     price_history: dict[str, dict[str, dict]] = {
         ticker: price_loader(ticker) for ticker in sorted(universe_union)
     }
+    # Pre-load dividend schedules (ex-date -> div/share) for the same universe, when
+    # a loader is configured. Empty per-ticker dicts for non-payers are fine.
+    dividend_history: dict[str, dict[str, float]] = (
+        {ticker: dividends_loader(ticker) for ticker in sorted(universe_union)}
+        if dividends_loader is not None else {}
+    )
 
     # One Portfolio per strategy
     outcomes: dict[str, StrategyOutcome] = {
@@ -148,6 +159,12 @@ async def run_backtest(
         prices_at_date = _prices_at(price_history, date)
         is_decision_day = date in decision_set
 
+        # Dividends with an ex-date of today, across the whole universe. Each
+        # portfolio credits only the names it actually holds (see apply_dividends).
+        dividends_at_date = {
+            ticker: divs[date] for ticker, divs in dividend_history.items() if date in divs
+        }
+
         # Eligible universe as of this decision date (point-in-time when a loader
         # is configured; the static universe otherwise).
         universe_today = config.universe_at(date) if is_decision_day else []
@@ -164,7 +181,11 @@ async def run_backtest(
             outcome = outcomes[strategy.name]
             portfolio = outcome.portfolio
 
-            # 1. Mark-to-market every trading day (applies stop-loss + snapshots equity).
+            # 1. Credit any dividends going ex today (total-return), then mark-to-market
+            # (applies stop-loss + snapshots equity — so the snapshot includes the
+            # dividend cash). Dividends precede the stop-loss check, as in reality.
+            if dividends_at_date:
+                portfolio.apply_dividends(dividends_at_date)
             portfolio.mark_to_market(prices_at_date, date, stop_loss_pct=config.stop_loss_pct)
 
             # 2. Decide only on decision days.

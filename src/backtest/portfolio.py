@@ -91,6 +91,7 @@ class Portfolio:
         self.positions: dict[str, Position] = {}
         self.closed_trades: list[Trade] = []
         self.equity_curve: list[EquitySnapshot] = []
+        self.dividends_received: float = 0.0  # cumulative cash dividends (total-return)
 
     # ---------- queries ----------
 
@@ -211,6 +212,27 @@ class Portfolio:
             total_value=self.cash + positions_value,
         ))
         return stopped_out
+
+    def apply_dividends(self, dividends_per_share: dict[str, float]) -> float:
+        """Credit cash dividends for held positions on their ex-date (total return).
+
+        `dividends_per_share` maps ticker -> split-adjusted dividend per share for the
+        current date. Shares are fixed at entry (dollars_at_entry / entry_price, both
+        split-adjusted), so the credit is shares × dividend. Dividends arrive as cash
+        (as in a real account); the strategy redeploys them on its next rebalance — no
+        automatic DRIP. Returns the total credited this call.
+        """
+        total = 0.0
+        for ticker, pos in self.positions.items():
+            div = dividends_per_share.get(ticker)
+            if not div:
+                continue
+            shares = pos.dollars_at_entry / pos.entry_price
+            amount = shares * div
+            self.cash += amount
+            self.dividends_received += amount
+            total += amount
+        return total
 
     def close_all(self, prices: dict[str, float], date: str) -> None:
         """Close every open position at end-of-backtest. Positions with no price are dropped."""

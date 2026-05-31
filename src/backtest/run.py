@@ -47,6 +47,7 @@ from src.backtest.strategies import (
     RSIStrategy,
     SPYHoldStrategy,
 )
+from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
@@ -196,6 +197,7 @@ async def run(
         config,
         price_loader=price_loader,
         fundamentals_loader=fundamentals_loader,
+        dividends_loader=load_dividends,  # total-return (cache-only; {} for non-payers)
     )
 
 
@@ -290,6 +292,9 @@ def print_summary(result: BacktestResult) -> None:
             counts[d.direction] = counts.get(d.direction, 0) + 1
         print("-" * 72)
         print(f"multi_agent decisions logged: {len(ma.decisions)}  ->  {counts or '{}'}")
+        div = ma.portfolio.dividends_received
+        if div:
+            print(f"multi_agent dividends received (total-return): ${div:,.2f}")
     print("=" * 72 + "\n")
 
 

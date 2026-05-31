@@ -65,8 +65,13 @@ Singapore account** ($0.005/share, $1 min, 1% cap; `CostModel.ibkr_singapore_fix
 plus ~5bps/side slippage. *Next: sweep cost levels in the costed run to find where
 the edge breaks.*
 
-0.2 **Dividends / total return.** Reinvest at ex-date close (FMP dividend data
-already grabbed). Long-horizon results are wrong without it.
+0.2 **Dividends / total return.** ✅ **DONE (31 May 2026).** `src/data/dividends.py`
+loads the grabbed FMP dividend cache (split-adjusted `adjDividend`, keyed by ex-date);
+the replay loop credits held positions on the ex-date via `Portfolio.apply_dividends`
+(cash, as in a real account — redeployed on the next rebalance, no auto-DRIP). Verified
+our prices are split-adjusted-but-not-div-adjusted (NVDA 10:1, no discontinuity), so no
+double-count. Equity curve (hence Sharpe/return) is now total-return; summary reports
+dividends received. Off when no loader passed (price-return only) — tests unchanged.
 
 0.3 **Walk-forward / out-of-sample.** A protocol where any threshold or prompt
 tuning happens on a train window and is *measured* on a held-out window. Track
