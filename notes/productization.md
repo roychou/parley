@@ -34,9 +34,14 @@ certainly do not deploy capital) until it is met.
 - Reproducibility scaffolding: per-kind cache versioning, full decision audit log.
 
 **Fiction / missing (the gap to real money):**
-- **Zero transaction costs / slippage** — every backtest number is currently
-  non-decision-grade.
-- **No out-of-sample / walk-forward discipline** — overfitting risk is unmeasured.
+- **Training-data contamination (the big one).** LLM decisions over in-training-window
+  dates measure the model's *memory* of those tickers, not a strategy. Unaddressed by
+  data hygiene — see 0.0. The headline blocker for any edge claim.
+- ~~Zero transaction costs / slippage~~ — **resolved (0.1)**: cost/slippage model,
+  IBKR-Singapore defaults, swept via CLI.
+- ~~No total return~~ — **resolved (0.2)**: dividends credited on ex-date.
+- ~~No out-of-sample / walk-forward discipline~~ — **partly resolved (0.3/0.4)**:
+  tuning-axis OOS split + run log. (Does NOT cover the contamination axis — see 0.0.)
 - **Risk management = one stop-loss.** No sizing model, no exposure/concentration
   limits, no drawdown governor.
 - **No execution path** — no broker, no paper trading, no reconciliation.
@@ -50,6 +55,41 @@ certainly do not deploy capital) until it is met.
 ## Phase 0 — Methodology integrity (DO THIS FIRST)
 
 *Goal: make backtest results tell the truth, then find out if there's an edge.*
+
+0.0 **Temporal validity — training-data contamination (THE foundational gate).**
+⚠️ **Open; reframes everything below.** When an LLM makes the decisions, a backtest
+over dates *inside the model's training window* is contaminated **by construction**:
+the specialist models (Sonnet 4.6 / Haiku 4.5, cutoffs in 2025) have ingested what
+these tickers did — news, earnings recaps, "best stocks of 2024" narratives. The
+leakage is **in the weights, not the inputs**, so our careful point-in-time *data*
+hygiene (EDGAR filing dates, as-of prices) does **not** fix it. An in-window backtest
+measures *memory + strategy*, confounded — and it inflates the **multi-agent** line
+specifically (the deterministic baselines are clean), i.e. exactly the comparison we
+care about. A senior reader discounts an in-window LLM headline return heavily.
+
+Crucially, this is a **different axis** from 0.3's split (which is in-/out-of-sample
+relative to *our tuning*). A 2024→2026 walk-forward is entirely inside the model's
+knowledge — every fold is contaminated. The two axes are independent; you need both.
+
+What a *clean* test actually requires:
+- **Post-cutoff window only** — restrict decision dates to *after* the specialist
+  models' training cutoff (~late-2025 → our May-2026 data edge). The only
+  uncontaminated backtest. **The squeeze:** that window is short (~6–12 months), which
+  collides with the statistical-significance need (enough independent bets). Clean *and*
+  significant from a backtest alone may be unattainable — accept this honestly.
+- **Forward paper trading (Phase 2) is the gold standard** — every live decision is on
+  data the model has never seen. Slow, but the only fully clean edge evaluation.
+- **Anonymization probe** — feed "Company A" + numbers, no ticker/date; compare named
+  vs. anonymized returns to *measure* the contamination gap (imperfect; a real product
+  knows the ticker, but it quantifies the leak).
+
+**Demote the in-window backtest to engineering validation** (does the pipeline produce
+sane, well-formed decisions?), *not* edge evidence. For the **product track** this
+matters less than it sounds — live trading is always post-cutoff, so contamination
+corrupts the backtest-as-predictor, not live performance; gate the edge claim on
+post-cutoff + forward paper. For the **product track**, the senior move is to
+*surface* this analysis (post-cutoff result + anonymization gap + why forward paper
+beats the backtest) — understanding the problem is a stronger signal than any return.
 
 0.1 **Transaction-cost & slippage model.** ✅ **DONE (31 May 2026).**
 `src/backtest/costs.py` (`CostModel`): adverse-fill slippage + commission
@@ -81,6 +121,9 @@ entry_date (the decision) — and reports metrics per segment (`--oos-split DATE
 significance floor (`MIN_MEANINGFUL_BETS=30`). The protocol is procedural: tune on
 in-sample, judge on the OOS window you commit NOT to touch. *Single split is the
 MVP; rolling multi-fold walk-forward is the future extension.*
+**Scope caveat:** this axis guards against *our* overfitting-by-iteration only. It
+does **nothing** against the model's training-window leakage (0.0) — both folds can be
+fully contaminated. Don't read a clean OOS split here as a clean edge.
 
 0.4 **Multiple-testing discipline.** ✅ **DONE (31 May 2026).**
 `src/backtest/runlog.py` appends one record per run (config + git state + headline
@@ -96,12 +139,16 @@ scale (a $10k position in a $100M+/day-ADV large-cap is ~0.01% participation —
 impact), so deferred; revisit with an ADV-participation + market-impact model only if
 capital grows large (ties to the impact term left out of `CostModel`).
 
-> **GATE 0 (the honest gate):** Over a walk-forward window, *after costs and
-> dividends*, the system shows a **statistically credible** excess return vs.
-> SPY (risk-adjusted), resting on enough independent bets to not be noise.
-> **If it fails here, stop — do not trade.** Iterate on the signal or accept that
-> an index fund wins. Spending on bigger LLM runs before this gate buys a nicer
-> illusion.
+> **GATE 0 (the honest gate):** On **temporally valid** data — decision dates
+> *after* the specialist models' training cutoff (0.0), and/or forward paper
+> trading — *after costs and dividends* (0.1/0.2), the system shows a credible
+> risk-adjusted excess return vs. SPY with **positive alpha, not just beta** (0.5),
+> resting on enough independent bets to not be noise (0.3/0.4).
+> **If it fails here, stop — do not trade.** And note the order: an edge measured on
+> *contaminated* (in-training-window) data is not an edge, however good the costs and
+> OOS hygiene look — temporal validity (0.0) is the precondition for this gate, not an
+> afterthought. The in-window backtest is engineering validation only. Spending on
+> bigger in-window LLM runs before a post-cutoff/forward design buys a nicer illusion.
 
 ---
 
@@ -210,7 +257,9 @@ Sequenced by value, and only once the edge is validated and risk-controlled:
 
 ## Kill criteria (when to stop — stated in advance)
 
-- Fails GATE 0 (no credible edge after costs) → do not trade.
+- Fails GATE 0 (no credible edge after costs, **on temporally valid data**) → do not trade.
+- The edge exists only *in-training-window* and vanishes post-cutoff / in forward paper
+  → it was the model's memory, not a strategy. Do not trade.
 - Live/paper materially underperforms backtest with no explainable cause.
 - Realized drawdown breaches the pre-stated risk budget.
 - After-tax expected return does not beat a passive index for the risk taken.
@@ -227,6 +276,19 @@ Sequenced by value, and only once the edge is validated and risk-controlled:
 
 ## Immediate next step
 
-Build **Phase 0.1 (transaction costs + slippage)** before spending further on
-larger LLM runs, then re-run a modest window *with* costs to test GATE 0. That
-spend then buys a decision-grade answer instead of a frictionless illusion.
+Phase 0.1–0.5 are **done** (costs, dividends, walk-forward, run log, alpha/beta).
+The gating work is now **0.0 — temporal validity**, which reframes the costed run:
+
+1. **Identify the post-cutoff window.** Confirm the specialist models' training
+   cutoffs; the clean decision dates are those strictly after. Expect ~6–12 months
+   against our May-2026 data edge.
+2. **Design the GATE-0 run as post-cutoff-only** (short, low-power, but *clean*), and
+   plan the **anonymization probe** (named vs. anonymized) to size the contamination
+   gap on the in-window data.
+3. Treat any in-window backtest as **engineering validation**, not edge evidence.
+4. The real edge verdict comes from **forward paper trading** (Phase 2) — start that
+   clock as early as possible, since it's the only fully clean evaluation and it only
+   accrues with calendar time.
+
+Do not spend on a large in-training-window run expecting an edge answer — it can't
+give one.
