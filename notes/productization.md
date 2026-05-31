@@ -60,7 +60,10 @@ for *all* strategies (baselines included). Net-of-cost trade P&L; threaded throu
 retail account (~5bps/side ≈ 10bps round-trip, zero commission). Frictionless by
 default elsewhere, so prior behavior/tests are unchanged. **Market impact (size/ADV)
 deliberately deferred to 0.5 (capacity)** — this model is size-agnostic.
-*Next: sweep cost levels in the costed run to find where the edge breaks.*
+Run defaults model the **real intended broker — IBKR Pro Fixed, US stocks,
+Singapore account** ($0.005/share, $1 min, 1% cap; `CostModel.ibkr_singapore_fixed`)
+plus ~5bps/side slippage. *Next: sweep cost levels in the costed run to find where
+the edge breaks.*
 
 0.2 **Dividends / total return.** Reinvest at ex-date close (FMP dividend data
 already grabbed). Long-horizon results are wrong without it.
@@ -183,6 +186,12 @@ Sequenced by value, and only once the edge is validated and risk-controlled:
   error is a real loss.
 - **Psychological discipline** — a rule for whether/when a human may override the
   system (and the honest knowledge that discretionary overrides usually hurt).
+- **Total cost of ownership / unit economics** *(defer; cost it later)* — beyond
+  transaction costs, the *running* cost: LLM spend per rebalance at live cadence,
+  market-data subscriptions, compute/hosting, monitoring, IBKR account/data fees.
+  The real test is net-of-everything return on deployed capital. A strategy that
+  beats SPY by a hair but costs $X/month in infra + LLM may still lose to the index
+  on a small personal account. Size this against expected capital before going live.
 
 ## Kill criteria (when to stop — stated in advance)
 

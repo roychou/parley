@@ -44,6 +44,18 @@ def test_commission_bps_and_per_share_and_min():
     assert c.commission(0.0, 100.0) == 0.0
 
 
+def test_ibkr_singapore_fixed_preset():
+    c = CostModel.ibkr_singapore_fixed()
+    assert c.slippage_bps == 5.0
+    # $10k position @ $100 = 100 shares: 100*$0.005 = $0.50, floored to $1 min
+    assert c.commission(10_000.0, 100.0) == pytest.approx(1.0)
+    # large position: per-share dominates, above the $1 floor, below the 1% cap
+    # $100k @ $200 = 500 shares * $0.005 = $2.50
+    assert c.commission(100_000.0, 200.0) == pytest.approx(2.50)
+    # tiny order: 1% cap overrides the $1 floor ($30 trade -> $0.30, not $1)
+    assert c.commission(30.0, 100.0) == pytest.approx(0.30)
+
+
 # ---- Portfolio integration ----------------------------------------------
 def test_zero_cost_portfolio_unchanged():
     """A frictionless Portfolio: round-trip at the same price nets exactly zero."""

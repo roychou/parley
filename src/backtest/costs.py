@@ -30,6 +30,7 @@ class CostModel:
     commission_bps: float = 0.0        # % of notional, in basis points (1 bp = 0.01%)
     commission_per_share: float = 0.0  # cash per share
     min_commission: float = 0.0        # per-order floor
+    max_commission_pct: float = 0.0    # per-order cap as % of notional (0 = no cap)
     slippage_bps: float = 0.0          # adverse price move at fill, in basis points
 
     def fill_price(self, price: float, side: str) -> float:
@@ -38,12 +39,33 @@ class CostModel:
         return price * (1.0 + adj) if side == "BUY" else price * (1.0 - adj)
 
     def commission(self, notional: float, fill_price: float) -> float:
-        """Cash commission for a fill of `notional` dollars at `fill_price`."""
+        """Cash commission for a fill of `notional` dollars at `fill_price`.
+
+        Order matches IBKR's rule: per-share/bps charge, floored at the per-order
+        minimum, then capped at a % of notional (the cap can override the floor for
+        very small orders — you never pay more than the cap)."""
         if notional <= 0 or fill_price <= 0:
             return 0.0
         shares = notional / fill_price
         charge = notional * (self.commission_bps / 10_000.0) + shares * self.commission_per_share
-        return max(charge, self.min_commission)
+        charge = max(charge, self.min_commission)
+        if self.max_commission_pct > 0.0:
+            charge = min(charge, notional * (self.max_commission_pct / 100.0))
+        return charge
+
+    @classmethod
+    def ibkr_singapore_fixed(cls, slippage_bps: float = 5.0) -> CostModel:
+        """IBKR Pro, Fixed pricing, US stocks, Singapore account: USD 0.005/share,
+        USD 1.00 per-order minimum, capped at 1% of trade value. Plus a default
+        ~5bps/side slippage for liquid large-caps (microstructure, not a broker fee;
+        IBKR SMART routing makes this conservative). Excludes tiny pass-through
+        regulatory fees (SEC/FINRA), immaterial at these sizes."""
+        return cls(
+            commission_per_share=0.005,
+            min_commission=1.0,
+            max_commission_pct=1.0,
+            slippage_bps=slippage_bps,
+        )
 
     @property
     def is_frictionless(self) -> bool:
@@ -57,7 +79,8 @@ class CostModel:
     def describe(self) -> str:
         if self.is_frictionless:
             return "frictionless (no costs)"
+        cap = f", cap {self.max_commission_pct}%" if self.max_commission_pct else ""
         return (
             f"slippage={self.slippage_bps}bps, commission={self.commission_bps}bps"
-            f"+${self.commission_per_share}/sh (min ${self.min_commission})"
+            f"+${self.commission_per_share}/sh (min ${self.min_commission}{cap})"
         )

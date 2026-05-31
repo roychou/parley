@@ -344,25 +344,28 @@ def main() -> None:
              "(coalesced, ~50%% cheaper, no per-minute throttle). Recommended for "
              "the full S&P 500 run, especially with --sentiment.",
     )
-    # Transaction costs (applied to every fill, all strategies). Defaults model a
-    # liquid-large-cap retail account: 5bps adverse slippage per side (~10bps
-    # round-trip), zero commission (zero-commission-broker era). SWEEP these to test
-    # whether the edge survives friction (productization GATE 0). --slippage-bps 0
-    # --commission-bps 0 reproduces the old frictionless results.
+    # Transaction costs (applied to every fill, all strategies). Defaults model the
+    # real intended broker — IBKR Pro Fixed, US stocks, Singapore account: $0.005/sh,
+    # $1 min, 1% cap — plus ~5bps/side slippage for liquid large-caps. SWEEP these to
+    # test whether the edge survives friction (productization GATE 0); pass
+    # --slippage-bps 0 --commission-per-share 0 --min-commission 0 for frictionless.
     parser.add_argument("--slippage-bps", type=float, default=5.0,
                         help="Adverse slippage per fill, basis points (default 5).")
     parser.add_argument("--commission-bps", type=float, default=0.0,
-                        help="Commission as bps of notional (default 0).")
-    parser.add_argument("--commission-per-share", type=float, default=0.0,
-                        help="Commission per share in dollars (default 0).")
-    parser.add_argument("--min-commission", type=float, default=0.0,
-                        help="Per-order commission floor in dollars (default 0).")
+                        help="Commission as bps of notional (default 0; IBKR uses per-share).")
+    parser.add_argument("--commission-per-share", type=float, default=0.005,
+                        help="Commission per share in dollars (default 0.005, IBKR fixed).")
+    parser.add_argument("--min-commission", type=float, default=1.0,
+                        help="Per-order commission floor in dollars (default 1.0, IBKR).")
+    parser.add_argument("--max-commission-pct", type=float, default=1.0,
+                        help="Per-order commission cap as %% of notional (default 1.0, IBKR).")
     args = parser.parse_args()
 
     cost_model = CostModel(
         commission_bps=args.commission_bps,
         commission_per_share=args.commission_per_share,
         min_commission=args.min_commission,
+        max_commission_pct=args.max_commission_pct,
         slippage_bps=args.slippage_bps,
     )
 
