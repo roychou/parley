@@ -1,0 +1,94 @@
+"""
+Forward session runner — one scheduled paper-trading step, end to end.
+
+Ties the pieces together for a single live decision date: screen the universe (fresh
+filers ∪ holdings), get a Decision per candidate from the injected decision provider,
+then mark-to-market + execute against the persistent PaperBook. Vendor-agnostic — the
+decision provider and the current-price function are injected, so the IBKR adapters
+(or any source) drop into these seams without touching this loop.
+
+This is the forward analog of one iteration of the backtest replay loop, but stateful
+across runs (loads/saves the PaperBook). A scheduler (cron / launchd) calls this weekly.
+"""
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+from datetime import date, timedelta
+
+from src.backtest.costs import CostModel
+from src.backtest.screen import FilingDatesFn, select_candidates
+from src.forward.paper import PaperBook, run_forward_step
+from src.schemas import Decision
+
+logger = logging.getLogger(__name__)
+
+DecisionProvider = Callable[[str, str], Awaitable[Decision | None]]
+CurrentPrice = Callable[[str], float | None]
+
+
+def _window_start(as_of: str, lookback_days: int) -> str:
+    y, m, d = (int(x) for x in as_of.split("-"))
+    return (date(y, m, d) - timedelta(days=lookback_days)).isoformat()
+
+
+async def run_forward_session(
+    book: PaperBook,
+    as_of: str,
+    eligible_universe: list[str],
+    *,
+    decision_provider: DecisionProvider,
+    current_price: CurrentPrice,
+    filing_dates_fn: FilingDatesFn | None = None,
+    screen_lookback_days: int = 7,
+    cost_model: CostModel | None = None,
+    dividends: dict[str, float] | None = None,
+    stop_loss_pct: float | None = -0.20,
+) -> dict:
+    """Run one forward paper-trading session and persist the book.
+
+    Candidates = names that filed in the trailing window ∪ current holdings (or the
+    whole eligible universe when no filing_dates_fn is given). A candidate that can't
+    be decided (provider returns None — missing data) is simply skipped. Returns a
+    small summary dict for logging/audit.
+    """
+    held = list(book.positions)
+    if filing_dates_fn is not None:
+        candidates = select_candidates(
+            eligible_universe, held, _window_start(as_of, screen_lookback_days), as_of,
+            filing_dates_fn,
+        )
+    else:
+        candidates = sorted(set(eligible_universe) | set(held))
+
+    decisions: list[Decision] = []
+    for ticker in candidates:
+        decision = await decision_provider(ticker, as_of)
+        if decision is not None:
+            decisions.append(decision)
+
+    # Prices for MTM + execution: everything held or freshly decided. Drop names with
+    # no current price (can't mark or trade them this session).
+    wanted = set(held) | {d.ticker for d in decisions}
+    prices = {t: current_price(t) for t in wanted}
+    prices = {t: p for t, p in prices.items() if p is not None}
+
+    run_forward_step(
+        book, as_of, prices, decisions,
+        cost_model=cost_model, dividends=dividends, stop_loss_pct=stop_loss_pct,
+    )
+    book.save()
+
+    counts: dict[str, int] = {}
+    for d in decisions:
+        counts[d.direction] = counts.get(d.direction, 0) + 1
+    summary = {
+        "as_of": as_of,
+        "candidates": len(candidates),
+        "decided": len(decisions),
+        "directions": counts,
+        "open_positions": len(book.positions),
+        "equity": book.equity_curve[-1]["total_value"] if book.equity_curve else book.cash,
+    }
+    logger.info(f"forward session {as_of}: {summary}")
+    return summary
