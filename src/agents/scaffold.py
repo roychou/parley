@@ -14,11 +14,36 @@ notes/sentiment-specialist-design.md.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.llm import MessageCreator
+
+logger = logging.getLogger(__name__)
 
 # (model, system_prompt, user_content) -> completion text
 LLMCall = Callable[[str, str, str], Awaitable[str]]
+
+
+def make_llm_call(messages_api: MessageCreator, max_tokens: int = 1024) -> LLMCall:
+    """Adapt a MessageCreator (client.messages or a BatchLLM) to the scaffold's
+    (model, system, user) -> text contract. Shared by the qualitative specialists."""
+    async def llm(model: str, system: str, user: str) -> str:
+        resp = await messages_api.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        logger.info(
+            f"api_usage call_site=scaffold model={model} "
+            f"input_tokens={resp.usage.input_tokens} output_tokens={resp.usage.output_tokens}"
+        )
+        return "".join(b.text for b in resp.content if b.type == "text")
+    return llm
 
 
 @dataclass(frozen=True)
