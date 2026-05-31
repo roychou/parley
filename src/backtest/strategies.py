@@ -174,10 +174,21 @@ class MultiAgentStrategy:
         if self.filing_dates_fn is not None:
             universe = self._screen(universe, date, portfolio)
             self._last_decision_date = date
-        decisions = await asyncio.gather(
-            *[self.decision_provider(ticker, date) for ticker in universe]
+        # Resilient fan-out: a single candidate that can't be analyzed (e.g. no
+        # point-in-time fundamentals/technicals, or a transient LLM error) must not
+        # abort the whole period at index scale. Skip it (logged) — it simply gets no
+        # decision this date — rather than letting one exception nuke the run.
+        results = await asyncio.gather(
+            *[self.decision_provider(ticker, date) for ticker in universe],
+            return_exceptions=True,
         )
-        self.last_decisions = list(decisions)
+        decisions: list[Decision] = []
+        for ticker, result in zip(universe, results):
+            if isinstance(result, Exception):
+                logger.warning(f"skipping {ticker} @ {date}: {type(result).__name__}: {result}")
+                continue
+            decisions.append(result)
+        self.last_decisions = decisions
         actions: list[Action] = []
         for decision in decisions:
             actions.extend(self._translate(decision, portfolio))

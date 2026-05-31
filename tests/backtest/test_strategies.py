@@ -193,6 +193,25 @@ async def test_multiagent_hold_no_action():
 
 
 @pytest.mark.asyncio
+async def test_multiagent_skips_candidate_that_errors():
+    """One candidate failing to analyze (e.g. no point-in-time fundamentals) must not
+    abort the period — it's skipped, the others still decide."""
+    p = Portfolio(initial_cash=100_000)
+
+    async def provider(ticker, date):
+        if ticker == "BAD":
+            raise ValueError(f"No fundamentals data available for {ticker} as of {date}")
+        return make_decision(ticker, "BUY", confidence=0.8)
+
+    strat = MultiAgentStrategy(decision_provider=provider)
+    actions = await strat.decide_all(["GOOD", "BAD", "ALSOGOOD"], "2026-01-09", {}, {}, p)
+
+    opened = {a.ticker for a in actions if a.kind == "OPEN"}
+    assert opened == {"GOOD", "ALSOGOOD"}                       # BAD skipped, not fatal
+    assert {d.ticker for d in strat.last_decisions} == {"GOOD", "ALSOGOOD"}
+
+
+@pytest.mark.asyncio
 async def test_multiagent_at_max_positions_skips_new_buys():
     p = Portfolio(initial_cash=1_000_000, max_positions=2)
     p.open("AAA", "2026-01-02", price=100.0, dollars=10_000)
