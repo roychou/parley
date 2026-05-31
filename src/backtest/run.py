@@ -48,7 +48,7 @@ from src.backtest.strategies import (
     RSIStrategy,
     SPYHoldStrategy,
 )
-from src.backtest.temporal import report_and_filter
+from src.backtest.temporal import DEFAULT_MODEL_CUTOFF, report_and_filter
 from src.backtest.validation import choose_split_date, print_walk_forward
 from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
@@ -401,10 +401,11 @@ def main() -> None:
     parser.add_argument("--no-runlog", action="store_true",
                         help="Skip appending to the experiment run log.")
     parser.add_argument(
-        "--model-cutoff", default=None,
-        help="Specialist models' training cutoff (YYYY-MM-DD). Decision dates after it "
-             "are temporally clean; on/before are contaminated by training memory. "
-             "VERIFY per model. Unset = all results are engineering validation only.",
+        "--model-cutoff", default=DEFAULT_MODEL_CUTOFF,
+        help=f"Specialist models' training-data cutoff (YYYY-MM-DD). Decision dates after "
+             f"it are temporally clean; on/before are contaminated by training memory. "
+             f"Default {DEFAULT_MODEL_CUTOFF} = Sonnet 4.6 training cutoff (the decision "
+             f"model). Pass '' to disable the check (treats all as engineering validation).",
     )
     parser.add_argument(
         "--clean-only", action="store_true",

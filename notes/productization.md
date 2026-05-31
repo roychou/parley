@@ -84,12 +84,22 @@ knowledge — every fold is contaminated. The two axes are independent; you need
   can't be anonymized (the most contaminated, least-anonymizable specialist).
 *Still open:* verify the actual model cutoffs, and forward paper trading.
 
+**Verified cutoffs (31 May 2026, Claude models overview):** Sonnet 4.6 (the
+fundamentals/technicals/sentiment-synthesis model) — reliable Aug 2025, **training-data
+Jan 2026**; Haiku 4.5 (sentiment map leaves) — training-data Jul 2025. Use the
+*training-data* cutoff for contamination (weights encode all of training, not just the
+reliable-recall window). The binding boundary is **Jan 2026** (Sonnet 4.6 makes the
+judgments); `temporal.DEFAULT_MODEL_CUTOFF = 2026-01-31`, now the runner default.
+
+**The brutal consequence:** against our ~May-2026 data edge, the clean (post-training)
+window is only **~Feb–May 2026 — about 4 months, ~4 monthly rebalances.** That is far
+too few independent bets for significance. **A backtest essentially cannot establish an
+edge for this strategy.** This isn't a tuning problem; it's structural. Accept it.
+
 What a *clean* test actually requires:
-- **Post-cutoff window only** — restrict decision dates to *after* the specialist
-  models' training cutoff (~late-2025 → our May-2026 data edge). The only
-  uncontaminated backtest. **The squeeze:** that window is short (~6–12 months), which
-  collides with the statistical-significance need (enough independent bets). Clean *and*
-  significant from a backtest alone may be unattainable — accept this honestly.
+- **Post-cutoff window only** — `--clean-only` restricts to dates after Jan 2026. The
+  only uncontaminated backtest, but ~4 months → no statistical power. Useful as a
+  *sanity check* (does the clean slice at least not lose money?), not an edge proof.
 - **Forward paper trading (Phase 2) is the gold standard** — every live decision is on
   data the model has never seen. Slow, but the only fully clean edge evaluation.
 - **Anonymization probe** — feed "Company A" + numbers, no ticker/date; compare named
