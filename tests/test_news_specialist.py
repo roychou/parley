@@ -37,7 +37,7 @@ class _FakeMessages:
                 "specialist": "news",
                 "signal": "BULLISH",
                 "confidence": 0.7,
-                "reasoning": "Beat-and-raise plus a sizable buyback are concrete bullish catalysts.",
+                "reasoning": "Beat-and-raise plus a sizable buyback are concrete bullish signals.",
                 "overall_tone": "positive",
                 "key_events": ["Q1 beat + raised guidance", "$2B buyback"],
             })])
@@ -77,3 +77,30 @@ async def test_returns_none_when_no_news():
 def test_format_articles_includes_dates_and_titles():
     blob = ns._format_articles(_ARTICLES)
     assert "2026-05-18" in blob and "raises guidance" in blob and "buyback" in blob
+
+
+def test_combine_news_sources_dedupes_merges_and_sorts():
+    def benzinga(t, a, lb):
+        return [{"title": "Acme beats Q1", "published": "2026-05-18"},
+                {"title": "Acme buyback", "published": "2026-05-20"}]
+
+    def cnbc_rss(t, a, lb):
+        return [{"title": "Acme buyback", "published": "2026-05-20"},   # dup of benzinga
+                {"title": "Acme CEO interview", "published": "2026-05-21"}]
+
+    merged = ns.combine_news_sources(benzinga, cnbc_rss)
+    arts = merged("ACME", "2026-05-22", 7)
+    titles = [a["title"] for a in arts]
+    # newest-first, deduped
+    assert titles == ["Acme CEO interview", "Acme buyback", "Acme beats Q1"]
+
+
+def test_combine_news_sources_tolerates_a_failing_source():
+    def good(t, a, lb):
+        return [{"title": "Real headline", "published": "2026-05-20"}]
+
+    def broken(t, a, lb):
+        raise RuntimeError("feed down")
+
+    merged = ns.combine_news_sources(broken, good)
+    assert [a["title"] for a in merged("ACME", "2026-05-22", 7)] == ["Real headline"]

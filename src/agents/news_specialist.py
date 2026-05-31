@@ -35,6 +35,33 @@ MAX_TOKENS = 1024
 # enforce that window so no future news leaks in.
 NewsSource = Callable[[str, str, int], list[dict]]
 
+
+def combine_news_sources(*sources: NewsSource) -> NewsSource:
+    """Merge several news sources into one feed (e.g. IBKR/Benzinga + an RSS adapter).
+
+    Dedupes by normalized title and returns newest-first. The merged source is what
+    the specialist reads, so adding/removing a source never touches the analysis.
+    Resilient: a source that errors is logged and skipped — one feed being down must
+    not blind the specialist to the others. (Prefer curated financial feeds; open
+    social sources carry manipulation/prompt-injection risk — see productization 3.3.)"""
+    def merged(ticker: str, as_of: str, lookback_days: int) -> list[dict]:
+        seen: set[str] = set()
+        out: list[dict] = []
+        for src in sources:
+            try:
+                articles = src(ticker, as_of, lookback_days)
+            except Exception as e:  # noqa: BLE001 — one bad feed shouldn't kill the rest
+                logger.warning(f"news source {getattr(src, '__name__', src)} failed: {e}")
+                continue
+            for a in articles:
+                key = a.get("title", "").strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(a)
+        out.sort(key=lambda a: a.get("published", ""), reverse=True)
+        return out
+    return merged
+
 _MAP_SYSTEM = (
     "You are reading a batch of recent news headlines and summaries about one company. "
     "Extract concisely as bullets: concrete events/catalysts (earnings, guidance, M&A, "
