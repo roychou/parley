@@ -33,7 +33,7 @@ from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from src.agents.scaffold import ScaffoldConfig
-from src.agents.sentiment_specialist import FilingSummaryCache
+from src.agents.sentiment_specialist import SUMMARY_VERSION, FilingSummaryCache
 from src.backtest.backtest_supervisor import run_backtest_supervisor
 from src.backtest.batch import BatchLLM
 from src.backtest.cache import SignalCache
@@ -83,6 +83,8 @@ def build_strategies(
     use_batch: bool = False,
     fundamentals_loader=None,
     technicals_loader=None,
+    signal_versions: dict[str, str] | None = None,
+    summary_version: str | None = None,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -99,14 +101,24 @@ def build_strategies(
     fundamentals_loader / technicals_loader are the supervisor's own point-in-time
     loaders; when None the supervisor uses its defaults (live, 5y). sp500 mode binds
     them to the cached "max" series so per-candidate analysis stays offline too.
+
+    signal_versions overrides the cache version per specialist kind (the rest fall
+    back to cache_version); summary_version does the same for the filing-summary
+    cache. Bump only the kind whose prompt you changed to recompute just that
+    specialist on a re-run — the others stay warm.
     """
-    signal_cache = SignalCache(SIGNAL_CACHE_DIR, default_version=cache_version)
+    signal_cache = SignalCache(
+        SIGNAL_CACHE_DIR, versions=signal_versions, default_version=cache_version
+    )
     # Bind client + cache -> provider is (ticker, as_of) -> Awaitable[Decision].
     messages_api = BatchLLM(client) if use_batch else None
     scaffold_config = ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None
     # Per-filing summary cache (keyed by accession) — reused across decision dates,
     # quarters, and tickers, halving the sentiment scaffold's map-reduce cost.
-    summary_cache = FilingSummaryCache(SUMMARY_CACHE_DIR) if include_sentiment else None
+    summary_cache = (
+        FilingSummaryCache(SUMMARY_CACHE_DIR, version=summary_version or SUMMARY_VERSION)
+        if include_sentiment else None
+    )
     loader_kwargs = {}
     if fundamentals_loader is not None:
         loader_kwargs["fundamentals_loader"] = fundamentals_loader
@@ -140,6 +152,8 @@ async def run(
     screen_lookback_days: int = 100,
     include_sentiment: bool = False,
     use_batch: bool = False,
+    signal_versions: dict[str, str] | None = None,
+    summary_version: str | None = None,
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
@@ -170,6 +184,8 @@ async def run(
             include_sentiment, use_batch,
             fundamentals_loader=fundamentals_loader if use_sp500 else None,
             technicals_loader=technicals_loader,
+            signal_versions=signal_versions,
+            summary_version=summary_version,
         ),
         universe_loader=universe_loader,
     )
@@ -284,7 +300,24 @@ def main() -> None:
         "--dates", nargs="+", default=DEFAULT_DATES, help="Decision dates (YYYY-MM-DD)."
     )
     parser.add_argument(
-        "--version", default="v1", help="Decision-cache version (bump when prompts change)."
+        "--version", default="v1",
+        help="Default signal-cache version (bump when prompts change; re-spends all "
+             "specialists). Prefer the per-kind flags below to recompute just one.",
+    )
+    parser.add_argument(
+        "--fundamentals-version", help="Override cache version for fundamentals only."
+    )
+    parser.add_argument(
+        "--technicals-version", help="Override cache version for technicals only."
+    )
+    parser.add_argument(
+        "--sentiment-version", help="Override cache version for sentiment only."
+    )
+    parser.add_argument(
+        "--summary-version",
+        help="Override the filing-summary cache version (bump when the map/extraction "
+             "prompts change; a sentiment *synthesis*-only tweak should NOT bump this, "
+             "so the costly map-reduce stays cached).",
     )
     parser.add_argument(
         "--sp500", action="store_true",
@@ -308,15 +341,29 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Per-kind overrides; kinds left unset fall back to --version in SignalCache.
+    signal_versions = {
+        kind: ver
+        for kind, ver in (
+            ("fundamentals", args.fundamentals_version),
+            ("technicals", args.technicals_version),
+            ("sentiment", args.sentiment_version),
+        )
+        if ver
+    }
+
     scope = "S&P 500 (PIT) + event screen" if args.sp500 else f"{len(args.tickers)} watchlist"
     sent = " + sentiment" if args.sentiment else ""
     mode = " [batch]" if args.batch else ""
+    overrides = f" overrides={signal_versions}" if signal_versions else ""
     logger.info(
-        f"Backtest: {scope}{sent}{mode} x {len(args.dates)} dates, cache version={args.version}"
+        f"Backtest: {scope}{sent}{mode} x {len(args.dates)} dates, "
+        f"cache version={args.version}{overrides}"
     )
     result = asyncio.run(
         run(args.tickers, args.dates, args.version, args.sp500,
-            args.screen_lookback_days, args.sentiment, args.batch)
+            args.screen_lookback_days, args.sentiment, args.batch,
+            signal_versions=signal_versions or None, summary_version=args.summary_version)
     )
     print_summary(result)
 
