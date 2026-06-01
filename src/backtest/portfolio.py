@@ -128,15 +128,30 @@ class Portfolio:
             return False
 
         # Adverse fill (buy pays up) + entry commission charged in cash. Total cash
-        # outlay is the notional plus commission; reject if it exceeds available cash.
+        # outlay is the notional plus commission.
         fill = self.costs.fill_price(price, "BUY")
         commission = self.costs.commission(dollars, fill)
         if dollars + commission > self.cash:
-            logger.debug(
-                f"open rejected: insufficient cash for {ticker} "
-                f"(need {dollars + commission}, have {self.cash})"
-            )
-            return False
+            # If the notional alone exceeds cash, the order is genuinely unaffordable.
+            if dollars > self.cash:
+                logger.debug(
+                    f"open rejected: insufficient cash for {ticker} "
+                    f"(need {dollars + commission}, have {self.cash})"
+                )
+                return False
+            # The notional fits but commission tips it over — the case of a
+            # fully-invested order sized at ~100% of cash. Deploy all investable
+            # cash: shrink the notional so notional + commission <= cash. Commission
+            # is monotone non-decreasing in notional, so recomputing against the
+            # shrunk figure can only lower it, leaving at most a tiny cash sliver.
+            dollars = self.cash - commission
+            commission = self.costs.commission(dollars, fill)
+            if dollars <= 0 or dollars + commission > self.cash + 1e-6:
+                logger.debug(
+                    f"open rejected: cash cannot cover commission for {ticker} "
+                    f"(cash {self.cash}, commission {commission})"
+                )
+                return False
 
         self.cash -= dollars + commission
         self.positions[ticker] = Position(

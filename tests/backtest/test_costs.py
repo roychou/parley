@@ -89,13 +89,16 @@ def test_costs_make_a_flat_roundtrip_lose_money():
     assert (100_000.0 - p.cash) == pytest.approx(24.0, abs=0.2)
 
 
-def test_open_rejected_when_commission_exceeds_cash():
-    """Cash outlay is notional + commission; an all-in open that leaves no room for
-    commission is rejected rather than overdrawing."""
+def test_all_in_open_shrinks_to_fit_commission():
+    """An all-in open (notional == cash) where commission would tip the outlay over
+    cash is shrunk to deploy all investable cash net of fees, NOT rejected. Rejecting
+    it silently broke the fully-invested SPY benchmark under realistic commissions.
+    The no-overdraw invariant still holds: cash never goes negative."""
     costs = CostModel(commission_bps=10.0)
     p = Portfolio(initial_cash=10_000.0, cost_model=costs)
-    assert p.open("AAA", "2026-01-01", price=100.0, dollars=10_000.0) is False
-    assert p.cash == 10_000.0  # untouched
+    assert p.open("AAA", "2026-01-01", price=100.0, dollars=10_000.0) is True
+    assert "AAA" in p.positions
+    assert 0.0 <= p.cash < 20.0  # all but the commission sliver deployed; never overdrawn
 
 
 # ---- end-to-end: costs flow through the replay loop ----------------------

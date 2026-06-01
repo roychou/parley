@@ -43,6 +43,23 @@ def test_open_rejected_when_insufficient_cash():
     assert p.cash == 5_000
 
 
+def test_fully_invested_order_fits_under_commission():
+    """A 100%-of-cash order (e.g. the SPY-hold benchmark) must fill, not be
+    rejected because commission tips the notional just over cash. The notional
+    is shrunk to deploy all investable cash net of fees."""
+    from src.backtest.costs import CostModel
+    cm = CostModel(slippage_bps=0.0, commission_per_share=0.005, min_commission=1.0)
+    p = Portfolio(initial_cash=100_000, max_positions=1, cost_model=cm)
+    ok = p.open("SPY", "2026-05-08", price=737.62, dollars=100_000)
+    assert ok is True
+    assert "SPY" in p.positions
+    # All investable cash deployed: notional + commission consumes the balance
+    # (a tiny float sliver may remain), never overdrawn.
+    assert -1e-6 <= p.cash < 2.0
+    pos = p.positions["SPY"]
+    assert pos.dollars_at_entry + pos.cost_at_entry <= 100_000 + 1e-6
+
+
 def test_open_rejected_for_non_positive_inputs():
     p = Portfolio(initial_cash=100_000)
     assert p.open("AAPL", "2026-01-09", price=0, dollars=1_000) is False
