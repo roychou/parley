@@ -3,6 +3,7 @@ import pytest
 
 from src.forward.paper import PaperBook
 from src.forward.session import run_forward_session
+from src.risk import RiskConfig
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
 
@@ -89,3 +90,30 @@ async def test_session_uses_filing_screen_when_provided(tmp_path):
     )
     assert summary["candidates"] == 1  # only CCC screened in
     assert list(book.positions) == ["CCC"]
+
+
+@pytest.mark.asyncio
+async def test_session_uses_risk_layer_when_configured(tmp_path):
+    """With a risk_config + injected volatility, BUYs are vol-sized as a set (the
+    calmer name gets the larger weight), not flat base_pct×confidence."""
+    book = PaperBook(initial_cash=100_000.0)
+
+    async def provider(ticker, as_of):
+        return _decision(ticker, "BUY", conf=0.8)
+
+    def price(ticker):
+        return 100.0
+
+    vols = {"CALM": 0.15, "VOL": 0.45}
+
+    def volatility(ticker):
+        return vols.get(ticker)
+
+    await run_forward_session(
+        book, "2026-06-05", ["CALM", "VOL"],
+        decision_provider=provider, current_price=price,
+        risk_config=RiskConfig(), volatility=volatility, stop_loss_pct=None,
+    )
+    # both opened; calmer (lower-vol) name holds more dollars (inverse-vol)
+    assert "CALM" in book.positions and "VOL" in book.positions
+    assert book.positions["CALM"]["dollars_at_entry"] > book.positions["VOL"]["dollars_at_entry"]

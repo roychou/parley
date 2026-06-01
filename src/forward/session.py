@@ -19,12 +19,14 @@ from datetime import date, timedelta
 from src.backtest.costs import CostModel
 from src.backtest.screen import FilingDatesFn, select_candidates
 from src.forward.paper import PaperBook, run_forward_step
+from src.risk import RiskConfig
 from src.schemas import Decision
 
 logger = logging.getLogger(__name__)
 
 DecisionProvider = Callable[[str, str], Awaitable[Decision | None]]
 CurrentPrice = Callable[[str], float | None]
+Volatility = Callable[[str], float | None]   # ticker -> annualized vol (for risk sizing)
 
 
 def _window_start(as_of: str, lookback_days: int) -> str:
@@ -44,6 +46,8 @@ async def run_forward_session(
     cost_model: CostModel | None = None,
     dividends: dict[str, float] | None = None,
     stop_loss_pct: float | None = -0.20,
+    risk_config: RiskConfig | None = None,
+    volatility: Volatility | None = None,
 ) -> dict:
     """Run one forward paper-trading session and persist the book.
 
@@ -73,9 +77,15 @@ async def run_forward_session(
     prices = {t: current_price(t) for t in wanted}
     prices = {t: p for t, p in prices.items() if p is not None}
 
+    # Risk sizing (when configured) needs per-BUY volatility from the injected source.
+    vols = None
+    if risk_config is not None and volatility is not None:
+        vols = {d.ticker: volatility(d.ticker) for d in decisions if d.direction == "BUY"}
+
     run_forward_step(
         book, as_of, prices, decisions,
         cost_model=cost_model, dividends=dividends, stop_loss_pct=stop_loss_pct,
+        risk_config=risk_config, vols=vols,
     )
     book.save()
 
