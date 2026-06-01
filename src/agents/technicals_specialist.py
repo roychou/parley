@@ -58,9 +58,12 @@ in confidence.
 Constraints:
 - The as_of field in your output MUST match the as_of from the tool result. Do not invent or \
 infer dates.
-- The supporting_indicators dict MUST contain the actual values returned by the tool, keyed by \
-indicator name.
+- Populate the typed fields (current_price, sma_20, rsi_14, date_range) with the actual values \
+returned by the tool.
 - Reasoning should reference specific indicator values from the tool.
+- POINT-IN-TIME ONLY: the tool returns current indicator values, not a time series. State trend \
+as a point-in-time condition (e.g. "price is above SMA-20"); do NOT claim a sustained trend or \
+momentum "over the past N weeks" — a single snapshot cannot support a temporal trajectory.
 - Make sure to include the ticker symbol in your final output.
 - STRICT DATA ADHERENCE: If `sma_20` or `rsi_14` are returned as `null` by the tool, DO NOT \
 invent, calculate, or estimate them.

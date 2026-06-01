@@ -65,13 +65,17 @@ stating overall confidence.
 - high growth + thin margin + high D/E = aggressive expansion, neutral with high uncertainty
 
 Constraints:
-- The price_date field in your output MUST match the price_date from the tool result. Do not \
-invent or infer dates.
-- The supporting_fundamentals dict MUST contain the actual values returned by the tool, keyed \
-by indicator name.
-- Data is annual filings, up to 15 months stale. Reason about company trajectory through the \
-last reported period, not today.
+- The as_of field in your output MUST match the as_of (analysis date) from the tool result. \
+Do not invent or infer dates.
+- Populate the typed fields (pe_ratio, profit_margin, rev_growth_yoy, debt_to_equity) with the \
+actual values returned by the tool.
+- A value of 0.0 is a real zero (e.g. 0% YoY revenue growth), NOT missing data — only \
+null/None means unavailable. Treat 0.0 as a meaningful data point, not as absent.
+- Data is the latest point-in-time quarterly filing (10-Q/10-K) available as of the analysis \
+date. Reason about the company through that last reported period, not today.
 - Reasoning should reference specific fundamentals values from the tool.
+- The tool also reports the filing's period_end_date and report_date; you may cite them, but \
+they are distinct from the as_of analysis date.
 - Make sure to include the ticker symbol in your final output.
 """
 

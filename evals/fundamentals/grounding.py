@@ -87,6 +87,13 @@ class GroundingEval:
             operates in a competitive market") are not factual claims and should be
             ignored.
 
+            Dates: SUPPORTING_FUNDAMENTALS includes `as_of`, the analysis/price date.
+            The analyst may also reference the underlying filing's fiscal period-end
+            or filing date (e.g. "period ending 2026-03-28") — these are legitimate
+            and are NOT provided to you. Do NOT mark a claim UNGROUNDED merely because
+            a reporting or period date is absent from SUPPORTING_FUNDAMENTALS or
+            differs from `as_of`. Judge only claims about the financial metrics.
+
             Be strict. If you are unsure whether a claim is grounded, mark it
             UNGROUNDED and explain why.
 
