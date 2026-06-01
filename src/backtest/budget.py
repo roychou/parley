@@ -23,15 +23,12 @@ from typing import Any
 from anthropic.types import Message
 
 from src.llm import MessageCreator
+from src.models import price_table
 
 logger = logging.getLogger(__name__)
 
-# USD per 1M tokens (input, output), list price. Source: Claude models overview.
-PRICE: dict[str, tuple[float, float]] = {
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5-20251001": (1.0, 5.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-}
+# USD per 1M tokens (input, output), from the pinned model registry (single source).
+PRICE: dict[str, tuple[float, float]] = price_table()
 
 
 class BudgetExceededError(RuntimeError):

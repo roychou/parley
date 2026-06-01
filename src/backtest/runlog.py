@@ -26,6 +26,7 @@ from typing import Any
 
 from src.backtest.metrics import compute_metrics
 from src.backtest.replay import BacktestResult
+from src.models import pinned_ids
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ def log_run(
     record = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "git": _git_state(),
+        "models": pinned_ids(),
         "config": config_summary,
         "metrics": _headline_metrics(result),
         "note": note,

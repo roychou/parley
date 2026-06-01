@@ -43,6 +43,7 @@ from src.backtest.cache import SignalCache, cached_signal
 from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of, pe_band
 from src.data.technicals import TechnicalsSnapshot, get_technicals_as_of
 from src.llm import MessageCreator
+from src.models import ROOT
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
 from src.schemas.sentiment import SentimentAnalysis
@@ -51,7 +52,7 @@ from src.synthesis import synthesize
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-6"
+MODEL = ROOT.id
 MAX_TOKENS = 1024
 
 

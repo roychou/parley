@@ -19,22 +19,21 @@ from __future__ import annotations
 
 import logging
 
+from src.models import DECISION_MODEL_CUTOFF, REGISTRY
+
 logger = logging.getLogger(__name__)
 
 # Specialist model TRAINING-DATA cutoffs — the conservative contamination boundary.
 # (Use training-data cutoff, not the "reliable knowledge" date: the weights can encode
 # anything seen in training, even past the reliable-recall date.) Source: Claude models
 # overview, platform.claude.com, fetched 31 May 2026.
-SPECIALIST_MODEL_CUTOFFS = {
-    "claude-sonnet-4-6": "2026-01-31",          # reliable Aug 2025; training data Jan 2026
-    "claude-haiku-4-5-20251001": "2025-07-31",  # reliable Feb 2025; training data Jul 2025
-}
+SPECIALIST_MODEL_CUTOFFS = {mid: m.training_cutoff for mid, m in REGISTRY.items()}
 # The binding boundary is the LATEST training cutoff among the decision models. Sonnet
 # 4.6 makes the fundamentals/technicals/sentiment-synthesis judgments, so Jan 2026 governs.
 # Consequence: against our ~May-2026 data edge, the clean window is only ~Feb–May 2026
 # (~4 months) — far too short for a significant backtest. Forward paper trading is the
 # only viable clean evaluation. UPDATE this if the specialist models change.
-DEFAULT_MODEL_CUTOFF = "2026-01-31"
+DEFAULT_MODEL_CUTOFF = DECISION_MODEL_CUTOFF
 
 
 def partition_by_cutoff(

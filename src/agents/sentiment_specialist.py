@@ -21,6 +21,7 @@ from src.agents.scaffold import LLMCall, ScaffoldConfig, analyze_text
 from src.data.edgar import EdgarError, recent_filings
 from src.data.edgar_filings import clean_text, extract_sections, fetch_filing_document
 from src.llm import MessageCreator
+from src.models import LEAF, ROOT
 from src.schemas.sentiment import SentimentAnalysis
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,8 @@ class FilingSummaryCache:
     def _path(self, accession: str) -> Path:
         return self.root / self.version / f"{accession}.json"
 
-ROOT_MODEL = "claude-sonnet-4-6"
-LEAF_MODEL = "claude-haiku-4-5-20251001"
+ROOT_MODEL = ROOT.id
+LEAF_MODEL = LEAF.id
 MAX_TOKENS = 1024
 
 # Leaf (map) prompt: cheap per-chunk extraction.

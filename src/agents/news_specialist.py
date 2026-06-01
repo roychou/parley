@@ -22,12 +22,13 @@ from collections.abc import Callable
 
 from src.agents.scaffold import ScaffoldConfig, analyze_text, make_llm_call
 from src.llm import MessageCreator
+from src.models import LEAF, ROOT
 from src.schemas.news import NewsAnalysis
 
 logger = logging.getLogger(__name__)
 
-ROOT_MODEL = "claude-sonnet-4-6"
-LEAF_MODEL = "claude-haiku-4-5-20251001"
+ROOT_MODEL = ROOT.id
+LEAF_MODEL = LEAF.id
 MAX_TOKENS = 1024
 
 # (ticker, as_of, lookback_days) -> list of {title, summary, published, source?, url?}.
