@@ -294,6 +294,19 @@ def _annual_flow(rows: list[dict]) -> dict[str, dict]:
     return _duration_by_end(rows, _ANNUAL_MIN_DAYS, _ANNUAL_MAX_DAYS)
 
 
+def _best_revenue_rows(gaap: dict) -> list[dict]:
+    """Revenue rows from the first concept in REVENUE_CONCEPTS that actually yields
+    quarterly flow. Some filers (e.g. BA/LW/TDG) tag a concept with only annual/YTD
+    durations while a *later* concept carries the true ~90-day quarters; picking the
+    first merely-present concept then loses the name entirely. Falls back to the
+    first present concept if none expose quarters."""
+    for name in REVENUE_CONCEPTS:
+        rows = _concept_rows(gaap, [name])
+        if rows and _quarter_flow(rows):
+            return rows
+    return _concept_rows(gaap, REVENUE_CONCEPTS)
+
+
 def _end_minus_one_year(end: str) -> str:
     """Same month/day, prior year (fiscal quarter-ends are consistent MM-DD)."""
     y, m, d = end.split("-")
@@ -342,7 +355,7 @@ def build_filings_history(ticker: str) -> list[dict]:
     if not gaap:
         raise EdgarError(f"No us-gaap facts for {ticker}")
 
-    rev_rows = _concept_rows(gaap, REVENUE_CONCEPTS)
+    rev_rows = _best_revenue_rows(gaap)
     ni_rows = _concept_rows(gaap, ["NetIncomeLoss"])
     eps_rows = _concept_rows(gaap, ["EarningsPerShareDiluted"], unit="USD/shares")
     eq_rows = _concept_rows(gaap, ["StockholdersEquity"])

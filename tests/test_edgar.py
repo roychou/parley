@@ -105,3 +105,22 @@ def test_total_debt_fallback_to_components(monkeypatch):
         "LongTermDebtCurrent": {"units": {"USD": [_inst("2024-09-30", 20, "2024-10-25")]}},
     }
     assert edgar._total_debt_at(gaap, "2024-09-30") == 100
+
+
+def test_best_revenue_rows_skips_annual_only_concept():
+    """When the first revenue concept has only annual/YTD durations (no ~90-day
+    quarters) but a later one carries quarters, pick the later one (BA/LW/TDG case)."""
+    # ExcludingAssessedTax: only a 365-day period (no quarters). Revenues: 90-day quarters.
+    gaap = {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            {"start": "2025-01-01", "end": "2025-12-31", "val": 400, "filed": "2026-02-01"},
+        ]}},
+        "Revenues": {"units": {"USD": [
+            {"start": "2025-01-01", "end": "2025-03-31", "val": 100, "filed": "2025-04-30"},
+            {"start": "2025-04-01", "end": "2025-06-30", "val": 110, "filed": "2025-07-30"},
+        ]}},
+    }
+    rows = edgar._best_revenue_rows(gaap)
+    # picked "Revenues" (the one with quarterly flow), not the annual-only first concept
+    assert edgar._quarter_flow(rows)  # non-empty quarters
+    assert any(r["val"] in (100, 110) for r in rows)

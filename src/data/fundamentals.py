@@ -93,7 +93,7 @@ FILINGS_CACHE_DIR = CACHE_DIR.parent / "filings_history"
 # Part of the cache key so a change to the extraction logic doesn't serve stale
 # filings (the cache is otherwise keyed only by ticker+date). Bump when
 # build_filings_history changes.
-FILINGS_CACHE_VERSION = "edgar-v2"  # v2: broadened REVENUE_CONCEPTS (gross/bank tags)
+FILINGS_CACHE_VERSION = "edgar-v3"  # v3: pick revenue concept by quarterly flow (BA/LW/TDG)
 
 
 def _filings_cache_path(ticker: str) -> Path:
