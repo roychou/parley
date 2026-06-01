@@ -57,6 +57,7 @@ from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of
 from src.data.universe import membership_end, sp500_as_of
+from src.risk import RiskConfig
 
 load_dotenv()
 
@@ -93,6 +94,7 @@ def build_strategies(
     summary_version: str | None = None,
     anonymize: bool = False,
     max_llm_usd: float | None = None,
+    risk_config: RiskConfig | None = None,
 ):
     """The comparison set: the multi-agent system under test plus four baselines.
 
@@ -152,6 +154,7 @@ def build_strategies(
             decision_provider=provider,
             filing_dates_fn=filing_dates_fn,
             screen_lookback_days=screen_lookback_days,
+            risk_config=risk_config,
         ),
         SPYHoldStrategy(),
         RandomStrategy(seed=42),
@@ -173,6 +176,7 @@ async def run(
     cost_model: CostModel | None = None,
     anonymize: bool = False,
     max_llm_usd: float | None = None,
+    risk_config: RiskConfig | None = None,
 ) -> BacktestResult:
     client = AsyncAnthropic()
     # Anonymized signals must not collide with named ones in the cache — namespace them.
@@ -210,6 +214,7 @@ async def run(
             summary_version=summary_version,
             anonymize=anonymize,
             max_llm_usd=max_llm_usd,
+            risk_config=risk_config,
         ),
         universe_loader=universe_loader,
         cost_model=cost_model,
@@ -437,6 +442,11 @@ def main() -> None:
              "computed signals are cached, so raise the cap and re-run to resume. "
              "STRONGLY recommended for any --sp500 run.",
     )
+    parser.add_argument(
+        "--risk", action="store_true",
+        help="Use the risk-management layer for sizing (vol-targeted + per-name cap + "
+             "max-gross + drawdown governor) instead of flat base_pct×confidence.",
+    )
     args = parser.parse_args()
 
     if args.sp500 and args.max_llm_usd is None:
@@ -488,7 +498,8 @@ def main() -> None:
         run(args.tickers, dates, args.version, args.sp500,
             args.screen_lookback_days, args.sentiment, args.batch,
             signal_versions=signal_versions or None, summary_version=args.summary_version,
-            cost_model=cost_model, anonymize=args.anonymize, max_llm_usd=args.max_llm_usd)
+            cost_model=cost_model, anonymize=args.anonymize, max_llm_usd=args.max_llm_usd,
+            risk_config=RiskConfig() if args.risk else None)
     )
     print_summary(result)
 
@@ -509,6 +520,7 @@ def main() -> None:
             "costs": cost_model.describe(),
             "model_cutoff": args.model_cutoff, "clean_only": args.clean_only,
             "anonymize": args.anonymize, "max_llm_usd": args.max_llm_usd,
+            "risk": args.risk,
             "oos_split": args.oos_split, "oos_frac": args.oos_frac,
         }
         n = log_run(result, config_summary, note=args.run_note)

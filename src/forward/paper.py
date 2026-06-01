@@ -28,6 +28,7 @@ from src.backtest.costs import CostModel
 from src.backtest.portfolio import EquitySnapshot, Portfolio, Position, Trade
 from src.backtest.replay import _execute_actions
 from src.backtest.strategies import MultiAgentStrategy
+from src.risk import RiskConfig
 from src.schemas import Decision
 
 DEFAULT_BOOK_PATH = Path("data/forward/paper_book.json")
@@ -94,13 +95,16 @@ def run_forward_step(
     base_pct: float = 0.10,
     floor: float = 0.02,
     cap: float = 0.15,
+    risk_config: RiskConfig | None = None,
+    vols: dict[str, float | None] | None = None,
 ) -> Portfolio:
     """Advance the paper book one session: credit dividends, mark-to-market, and — when
     `decisions` are supplied (a decision day) — translate and execute them.
 
-    Mutates `book` in place (caller saves). Reuses the multi-agent sizing and the
-    replay's closes-before-opens / single-sizing-snapshot invariants so forward paper
-    behaves identically to the backtest. Returns the live Portfolio for inspection.
+    Mutates `book` in place (caller saves). Sizing matches the backtest exactly: with a
+    risk_config, the risk layer (inverse-vol + caps + drawdown governor) sizes BUYs as a
+    set (needs `vols` per BUY); without one, the flat base_pct×confidence sizing.
+    Preserves the replay's closes-before-opens / single-sizing-snapshot invariants.
     """
     portfolio = book.to_portfolio(cost_model)
 
@@ -110,9 +114,10 @@ def run_forward_step(
 
     if decisions:
         translator = MultiAgentStrategy(
-            decision_provider=None, base_pct=base_pct, floor=floor, cap=cap
+            decision_provider=None, base_pct=base_pct, floor=floor, cap=cap,
+            risk_config=risk_config,
         )
-        actions = [a for d in decisions for a in translator._translate(d, portfolio)]
+        actions = translator.build_actions(decisions, portfolio, vols=vols)
         sizing_value = portfolio.total_value(prices)  # snapshot before any action
         closes = [a for a in actions if a.kind == "CLOSE"]
         opens = [a for a in actions if a.kind == "OPEN"]

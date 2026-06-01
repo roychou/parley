@@ -25,6 +25,12 @@ from typing import Awaitable, Callable, Literal, Protocol
 from src.backtest.portfolio import Portfolio
 from src.backtest.screen import FilingDatesFn, select_candidates
 from src.data.fundamentals import ValuationSnapshot
+from src.risk import (
+    RiskConfig,
+    annualized_volatility,
+    drawdown_derisk_multiplier,
+    size_positions,
+)
 from src.schemas import Decision
 
 logger = logging.getLogger(__name__)
@@ -151,11 +157,15 @@ class MultiAgentStrategy:
         cap: float = 0.15,
         filing_dates_fn: FilingDatesFn | None = None,
         screen_lookback_days: int = 100,
+        risk_config: RiskConfig | None = None,
     ):
         self.decision_provider = decision_provider
         self.base_pct = base_pct
         self.floor = floor
         self.cap = cap
+        # When set, the risk layer (vol-targeted sizing + max-gross + drawdown governor)
+        # replaces the flat base_pct×confidence sizing. None = legacy flat sizing.
+        self.risk_config = risk_config
         # Event-driven screen: when filing_dates_fn is provided, only analyze names
         # that filed since the last decision (plus current holdings). None -> analyze
         # the whole universe given (backward compatible).
@@ -209,9 +219,53 @@ class MultiAgentStrategy:
                 continue
             decisions.append(result)
         self.last_decisions = decisions
-        actions: list[Action] = []
-        for decision in decisions:
-            actions.extend(self._translate(decision, portfolio))
+        vols = self._candidate_vols(decisions, price_history, date)
+        return self.build_actions(decisions, portfolio, vols=vols)
+
+    def _candidate_vols(
+        self, decisions: list[Decision], price_history: dict[str, dict[str, dict]], date: str
+    ) -> dict[str, float | None]:
+        """Annualized vol per BUY candidate, as of `date`, for risk-based sizing.
+        Empty when no risk_config (vols unused on the flat path)."""
+        if self.risk_config is None:
+            return {}
+        lb = self.risk_config.vol_lookback
+        return {
+            d.ticker: annualized_volatility(price_history.get(d.ticker, {}), date, lb)
+            for d in decisions if d.direction == "BUY"
+        }
+
+    def build_actions(
+        self, decisions: list[Decision], portfolio: Portfolio,
+        vols: dict[str, float | None] | None = None,
+    ) -> list[Action]:
+        """Translate a decision set into actions. With no risk_config, the legacy flat
+        per-decision sizing (base_pct×confidence). With a risk_config, SELLs close held
+        names and BUYs are sized as a *set* by the risk layer (inverse-vol + per-name
+        cap + drawdown governor + max-gross scaling). Shared by backtest and forward."""
+        if self.risk_config is None:
+            actions: list[Action] = []
+            for decision in decisions:
+                actions.extend(self._translate(decision, portfolio))
+            return actions
+
+        actions = []
+        for d in decisions:  # SELLs: close held names
+            if d.direction == "SELL" and d.ticker in portfolio.positions:
+                actions.append(Action(kind="CLOSE", ticker=d.ticker,
+                                      reason="SELL_signal", decision=d))
+        buys = {
+            d.ticker: d for d in decisions
+            if d.direction == "BUY" and d.ticker not in portfolio.positions
+            and portfolio.can_open(d.ticker)
+        }
+        confidences = {t: d.confidence for t, d in buys.items()}
+        equity = [s.total_value for s in portfolio.equity_curve]
+        derisk = drawdown_derisk_multiplier(equity, self.risk_config)
+        weights = size_positions(confidences, vols or {}, self.risk_config, derisk)
+        for ticker, weight in weights.items():
+            actions.append(Action(kind="OPEN", ticker=ticker,
+                                  position_size_pct=weight, decision=buys[ticker]))
         return actions
 
     def _translate(self, decision: Decision, portfolio: Portfolio) -> list[Action]:

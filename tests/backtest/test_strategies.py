@@ -1,10 +1,9 @@
-import math
+import datetime as _dt
 
 import pytest
 
-from src.backtest.portfolio import Portfolio
+from src.backtest.portfolio import EquitySnapshot, Portfolio
 from src.backtest.strategies import (
-    Action,
     MultiAgentStrategy,
     PERankingStrategy,
     RandomStrategy,
@@ -13,9 +12,9 @@ from src.backtest.strategies import (
     compute_rsi,
 )
 from src.data.fundamentals import ValuationSnapshot
+from src.risk import RiskConfig
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
-
 
 # ==========================================
 # HELPERS
@@ -438,3 +437,69 @@ async def test_pe_ranking_skips_missing_or_invalid_pe():
     opened = {a.ticker for a in actions if a.kind == "OPEN"}
     # Only C and D have valid P/Es — only those eligible for ranking
     assert opened == {"C", "D"}
+
+
+# ==========================================
+# RISK-LAYER INTEGRATION (opt-in via risk_config)
+# ==========================================
+
+
+def _series(start_close, daily_moves, n):
+    """n daily closes from alternating up/down moves -> {date: {close}} (sequential dates)."""
+    closes, c = [], start_close
+    for i in range(n):
+        c *= (1 + daily_moves) if i % 2 == 0 else 1 / (1 + daily_moves)
+        closes.append(c)
+    base = _dt.date(2026, 1, 1)
+    hist = {
+        (base + _dt.timedelta(days=i)).isoformat(): {"close": round(v, 4)}
+        for i, v in enumerate(closes)
+    }
+    last = (base + _dt.timedelta(days=n - 1)).isoformat()
+    return hist, last
+
+
+@pytest.mark.asyncio
+async def test_risk_sizing_is_inverse_vol():
+    """With a risk_config, the calmer name gets a larger weight than the volatile one
+    (inverse-vol), both within the per-name cap."""
+    calm, calm_last = _series(100.0, 0.002, 70)    # ~0.2%/day -> low vol
+    vol, vol_last = _series(100.0, 0.04, 70)        # ~4%/day -> high vol
+    price_history = {"CALM": calm, "VOL": vol}
+
+    provider = make_decision_provider({
+        "CALM": make_decision("CALM", "BUY", 0.9),
+        "VOL": make_decision("VOL", "BUY", 0.9),
+    })
+    strat = MultiAgentStrategy(decision_provider=provider, risk_config=RiskConfig())
+    p = Portfolio(initial_cash=100_000)
+    actions = await strat.decide_all(["CALM", "VOL"], calm_last, price_history, {}, p)
+
+    opens = {a.ticker: a.position_size_pct for a in actions if a.kind == "OPEN"}
+    assert "CALM" in opens and "VOL" in opens
+    assert opens["CALM"] > opens["VOL"]                       # inverse-vol: calmer = bigger
+    assert all(w <= RiskConfig().max_position_pct + 1e-9 for w in opens.values())
+
+
+@pytest.mark.asyncio
+async def test_risk_drawdown_governor_blocks_new_opens():
+    """build_actions: a portfolio past the hard drawdown threshold opens nothing new."""
+    strat = MultiAgentStrategy(decision_provider=None, risk_config=RiskConfig())
+    p = Portfolio(initial_cash=100_000)
+    # equity peaked at 100k, now 75k -> -25% drawdown, past the -20% hard kill
+    p.equity_curve = [
+        EquitySnapshot(date="2026-01-01", cash=0, positions_value=100_000, total_value=100_000),
+        EquitySnapshot(date="2026-02-01", cash=0, positions_value=75_000, total_value=75_000),
+    ]
+    decisions = [make_decision("AAA", "BUY", 0.9)]
+    actions = strat.build_actions(decisions, p, vols={"AAA": 0.30})
+    assert [a for a in actions if a.kind == "OPEN"] == []     # governor zeroed new risk
+
+
+def test_build_actions_flat_when_no_risk_config():
+    """No risk_config -> legacy flat sizing (base_pct×confidence), unchanged."""
+    strat = MultiAgentStrategy(decision_provider=None, base_pct=0.10, floor=0.02, cap=0.15)
+    p = Portfolio(initial_cash=100_000)
+    actions = strat.build_actions([make_decision("AAA", "BUY", 0.8)], p)
+    opens = [a for a in actions if a.kind == "OPEN"]
+    assert len(opens) == 1 and opens[0].position_size_pct == pytest.approx(0.08)  # 0.10*0.8
