@@ -17,6 +17,7 @@ import json
 import logging
 from pathlib import Path
 
+from src.agents.safety import UNTRUSTED_PREAMBLE, wrap_untrusted
 from src.agents.scaffold import LLMCall, ScaffoldConfig, analyze_text
 from src.data.edgar import EdgarError, recent_filings
 from src.data.edgar_filings import clean_text, extract_sections, fetch_filing_document
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the filing-summary prompts (_ANALYSIS_SYSTEM/_MAP_SYSTEM), the section
 # extractor, or the chunking change — old cached summaries then fall out of scope.
-SUMMARY_VERSION = "v1"
+SUMMARY_VERSION = "v2"  # v2: prompt-injection hardening (untrusted-content wrapping)
 
 
 class FilingSummaryCache:
@@ -168,7 +169,10 @@ async def _filing_summary(
     parts = [s for s in (sections.get("mdna"), sections.get("risk_factors")) if s]
     content = "\n\n".join(parts) if parts else text  # fallback: whole filing
     summary = await analyze_text(
-        content, analysis_system=_ANALYSIS_SYSTEM, map_system=_MAP_SYSTEM, llm=llm, config=config
+        wrap_untrusted(content),
+        analysis_system=UNTRUSTED_PREAMBLE + _ANALYSIS_SYSTEM,
+        map_system=UNTRUSTED_PREAMBLE + _MAP_SYSTEM,
+        llm=llm, config=config,
     )
     if summary_cache is not None:
         summary_cache.set(accession, summary)

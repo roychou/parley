@@ -12,7 +12,8 @@ def test_price_table_covers_registry_and_haiku_alias():
     table = price_table()
     for m in REGISTRY.values():
         assert table[m.id] == (m.input_per_mtok, m.output_per_mtok)
-    assert table["claude-haiku-4-5"] == (LEAF.input_per_mtok, LEAF.output_per_mtok)  # dateless alias
+    # dateless Haiku alias prices the same
+    assert table["claude-haiku-4-5"] == (LEAF.input_per_mtok, LEAF.output_per_mtok)
 
 
 def test_pinned_ids_are_root_and_leaf():

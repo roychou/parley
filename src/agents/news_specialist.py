@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+from src.agents.safety import UNTRUSTED_PREAMBLE, wrap_untrusted
 from src.agents.scaffold import ScaffoldConfig, analyze_text, make_llm_call
 from src.llm import MessageCreator
 from src.models import LEAF, ROOT
@@ -127,9 +128,9 @@ async def run_news_specialist(
     llm = make_llm_call(messages_api, MAX_TOKENS)
 
     summary = await analyze_text(
-        _format_articles(articles),
-        analysis_system=_ANALYSIS_SYSTEM,
-        map_system=_MAP_SYSTEM,
+        wrap_untrusted(_format_articles(articles)),
+        analysis_system=UNTRUSTED_PREAMBLE + _ANALYSIS_SYSTEM,
+        map_system=UNTRUSTED_PREAMBLE + _MAP_SYSTEM,
         llm=llm,
         config=config,
     )
@@ -148,16 +149,19 @@ async def _synthesize_news(
     lookback_days: int,
     headlines: list[str],
 ) -> NewsAnalysis:
+    untrusted = (
+        f"NEWS SUMMARY:\n{summary}\n\n"
+        "REPRESENTATIVE HEADLINES:\n" + "\n".join(f"- {h}" for h in headlines)
+    )
     user_prompt = (
         f"Ticker: {ticker}\nAs of: {as_of}\n"
         f"News window: trailing {lookback_days} days, {n_articles} articles\n\n"
-        f"NEWS SUMMARY:\n{summary}\n\n"
-        f"REPRESENTATIVE HEADLINES:\n" + "\n".join(f"- {h}" for h in headlines)
+        + wrap_untrusted(untrusted)
     )
     resp = await messages_api.create(
         model=ROOT_MODEL,
         max_tokens=MAX_TOKENS,
-        system=_SYNTHESIS_SYSTEM,
+        system=UNTRUSTED_PREAMBLE + _SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": user_prompt}],
         tools=[{
             "name": "submit_news",
