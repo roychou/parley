@@ -2,13 +2,29 @@ import json
 import logging
 import math
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 # --- Logging & Config ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# Recency guard. An active filer reports every ~90 days (10-Q/10-K), so the latest
+# filing available as of any date is normally < ~130 days old. If the newest filing
+# we can find is more than this many days before the as-of date, the data is broken
+# (concept migration, parsing gap, delisting) — we abstain rather than trade on
+# years-stale fundamentals. Generous enough to tolerate a late/missed quarter; far
+# tighter than the multi-year staleness it is meant to catch.
+MAX_FILING_AGE_DAYS = 200
+
+
+def _days_between(earlier: str, later: str) -> int | None:
+    """(later - earlier) in days for YYYY-MM-DD strings; None if either won't parse."""
+    try:
+        return (date.fromisoformat(later) - date.fromisoformat(earlier)).days
+    except (ValueError, TypeError):
+        return None
 
 CACHE_DIR = Path("data/cache/fundamentals")
 UNIVERSE_FILE = Path("notes/universe.md")
@@ -93,7 +109,8 @@ FILINGS_CACHE_DIR = CACHE_DIR.parent / "filings_history"
 # Part of the cache key so a change to the extraction logic doesn't serve stale
 # filings (the cache is otherwise keyed only by ticker+date). Bump when
 # build_filings_history changes.
-FILINGS_CACHE_VERSION = "edgar-v3"  # v3: pick revenue concept by quarterly flow (BA/LW/TDG)
+# v4: revenue concept by most-recent coverage + YoY prior-period tolerance
+FILINGS_CACHE_VERSION = "edgar-v4"
 
 
 def _filings_cache_path(ticker: str) -> Path:
@@ -160,6 +177,18 @@ def get_fundamentals_as_of(
     if not eligible:
         return None
     latest = eligible[0]  # filings are most-recent first
+
+    # Recency guard: refuse to serve fundamentals whose newest available filing is
+    # grossly stale relative to as_of (see MAX_FILING_AGE_DAYS). Abstaining (None ->
+    # the replay/specialist skips the name) is the capital-preservation choice over
+    # silently trading on years-old numbers.
+    report_age = _days_between(latest["report_date"], as_of_date)
+    if report_age is None or report_age > MAX_FILING_AGE_DAYS:
+        logger.warning(
+            f"stale fundamentals for {ticker}: newest filing {latest['report_date']} "
+            f"is {report_age}d before {as_of_date} (cap {MAX_FILING_AGE_DAYS}d) — skipping"
+        )
+        return None
 
     # Get the close price at as_of_date (or the most recent available before it)
     prices = _get_prices_dict(ticker, price_period)

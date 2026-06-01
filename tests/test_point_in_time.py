@@ -66,8 +66,9 @@ def test_get_fundamentals_as_of_returns_none_when_no_eligible_filing(monkeypatch
 
 def test_get_fundamentals_as_of_falls_back_to_most_recent_price_before_date(monkeypatch):
     """If as_of_date is a non-trading day (e.g., weekend), use the most recent close <= date."""
+    # Filing kept recent relative to as_of so the recency guard doesn't (correctly) skip it.
     fake_filings = [
-        {"report_date": "2025-07-30", "period_end_date": "2025-06-30", "diluted_eps": 13.0,
+        {"report_date": "2026-01-30", "period_end_date": "2025-12-31", "diluted_eps": 13.0,
          "profit_margin": 0.36, "rev_growth_yoy": 0.15, "debt_to_equity": 0.33},
     ]
     monkeypatch.setattr(fund_mod, "get_filings_history", lambda ticker: fake_filings)
@@ -82,3 +83,28 @@ def test_get_fundamentals_as_of_falls_back_to_most_recent_price_before_date(monk
     assert snap is not None
     assert snap.price_date == "2026-03-13"  # fallback to Friday close
     assert snap.pe_ratio == pytest.approx(395.0 / 13.0)
+
+
+def test_get_fundamentals_as_of_skips_grossly_stale_filing(monkeypatch):
+    """Recency guard: when the newest available filing is grossly stale relative to
+    as_of (e.g. a concept-migration or parsing gap froze the history years back), the
+    layer abstains (None -> the replay/specialist skips the name) rather than trading
+    on years-old fundamentals. A fresh filing at the same as_of resolves normally."""
+    prices = {"2026-05-15": {"close": 100.0}}
+    monkeypatch.setattr(
+        fund_mod, "_get_prices_dict", lambda ticker, period="5y": prices
+    )
+
+    stale = [
+        {"report_date": "2020-02-20", "period_end_date": "2019-12-31", "diluted_eps": 5.0,
+         "profit_margin": 0.30, "rev_growth_yoy": 0.10, "debt_to_equity": 0.40},
+    ]
+    monkeypatch.setattr(fund_mod, "get_filings_history", lambda ticker: stale)
+    assert get_fundamentals_as_of("STALE", "2026-05-15") is None  # ~6yr stale → skip
+
+    fresh = [
+        {"report_date": "2026-05-01", "period_end_date": "2026-03-28", "diluted_eps": 5.0,
+         "profit_margin": 0.30, "rev_growth_yoy": 0.10, "debt_to_equity": 0.40},
+    ]
+    monkeypatch.setattr(fund_mod, "get_filings_history", lambda ticker: fresh)
+    assert get_fundamentals_as_of("FRESH", "2026-05-15") is not None  # 14d old → ok

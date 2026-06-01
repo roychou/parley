@@ -56,8 +56,32 @@ def _build(monkeypatch):
     return {f["period_end_date"]: f for f in edgar.build_filings_history("TEST")}
 
 
-def test_end_minus_one_year():
-    assert edgar._end_minus_one_year("2024-03-31") == "2023-03-31"
+def test_match_prior_year_tolerates_fiscal_drift():
+    # 52/53-week fiscal calendars drift a day or two year over year; the prior-year
+    # quarter must still match within tolerance (exact same-MM-DD would yield NaN YoY).
+    assert edgar._match_prior_year("2025-03-28", ["2024-03-29", "2025-06-28"]) == "2024-03-29"
+    # picks the nearest to ~365d prior when several candidates exist
+    assert edgar._match_prior_year("2025-03-28", ["2024-03-29", "2024-06-30"]) == "2024-03-29"
+    # nothing within ~1yr ± tolerance → None (don't fabricate a prior period)
+    assert edgar._match_prior_year("2025-06-28", ["2025-03-28"]) is None
+
+
+def test_best_revenue_rows_prefers_most_recent_coverage():
+    """Two concepts both expose quarters, but one is frozen years back (a deprecated
+    tag the filer migrated away from). Pick the concept reaching the most recent
+    period — the NVDA/XOM staleness bug, where the first present concept stopped in
+    2019/2023 while current revenue lives under another tag."""
+    stale = [_dur("2019-01-01", "2019-03-31", 100, "2019-04-30"),
+             _dur("2019-04-01", "2019-06-30", 110, "2019-07-30")]
+    current = [_dur("2025-01-01", "2025-03-31", 500, "2025-04-30"),
+               _dur("2025-04-01", "2025-06-30", 520, "2025-07-30")]
+    gaap = {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": stale}},
+        "Revenues": {"units": {"USD": current}},
+    }
+    rows = edgar._best_revenue_rows(gaap)
+    assert any(r["val"] in (500, 520) for r in rows)        # picked the current concept
+    assert all(r["val"] not in (100, 110) for r in rows)    # not the frozen one
 
 
 def test_span_filtering_ignores_ytd_trap(monkeypatch):

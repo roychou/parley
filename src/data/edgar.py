@@ -295,22 +295,44 @@ def _annual_flow(rows: list[dict]) -> dict[str, dict]:
 
 
 def _best_revenue_rows(gaap: dict) -> list[dict]:
-    """Revenue rows from the first concept in REVENUE_CONCEPTS that actually yields
-    quarterly flow. Some filers (e.g. BA/LW/TDG) tag a concept with only annual/YTD
-    durations while a *later* concept carries the true ~90-day quarters; picking the
-    first merely-present concept then loses the name entirely. Falls back to the
-    first present concept if none expose quarters."""
-    for name in REVENUE_CONCEPTS:
+    """Revenue rows from the concept whose quarterly flow reaches the most recent
+    period. Filers migrate revenue concepts over time, so the first merely-present
+    concept can be one frozen years in the past: NVDA keeps current revenue under
+    `Revenues` while its `RevenueFromContract...` tag stops in 2020, and AAPL is the
+    reverse. Among concepts that expose true ~90-day quarters, pick the one reaching
+    the latest period-end (tie-break: more quarters, then list priority). Falls back
+    to the first present concept if none expose quarters, so annual-only filers
+    (BA/LW/TDG) still resolve."""
+    best_rows: list[dict] = []
+    best_key: tuple[str, int, int] | None = None
+    for i, name in enumerate(REVENUE_CONCEPTS):
         rows = _concept_rows(gaap, [name])
-        if rows and _quarter_flow(rows):
-            return rows
+        if not rows:
+            continue
+        qf = _quarter_flow(rows)
+        if not qf:
+            continue
+        key = (max(qf), len(qf), -i)  # latest coverage, then richness, then priority
+        if best_key is None or key > best_key:
+            best_key, best_rows = key, rows
+    if best_rows:
+        return best_rows
     return _concept_rows(gaap, REVENUE_CONCEPTS)
 
 
-def _end_minus_one_year(end: str) -> str:
-    """Same month/day, prior year (fiscal quarter-ends are consistent MM-DD)."""
-    y, m, d = end.split("-")
-    return f"{int(y) - 1:04d}-{m}-{d}"
+def _match_prior_year(end: str, available: list[str], tol_days: int = 20) -> str | None:
+    """The period-end ~1 year before `end`, nearest within tolerance. Robust to
+    52/53-week fiscal calendars whose quarter-ends drift a few days year over year
+    (AAPL's Q2 ends 2026-03-28 vs 2025-03-29) — an exact same-MM-DD match silently
+    finds no prior period and yields a NaN growth rate. Quarters sit ~90 days apart,
+    so a small tolerance can only match the true prior-year period."""
+    target = date(*map(int, end.split("-"))) - timedelta(days=365)
+    best, best_diff = None, tol_days + 1
+    for e in available:
+        diff = abs((date(*map(int, e.split("-"))) - target).days)
+        if diff < best_diff:
+            best, best_diff = e, diff
+    return best
 
 
 def _instant_at(rows: list[dict], end_date: str) -> float | None:
@@ -372,8 +394,13 @@ def build_filings_history(ticker: str) -> list[dict]:
         for fye, fy_rec in fy_map.items():
             if fye in q_map:
                 continue
-            prior_fye = _end_minus_one_year(fye)
-            parts = [q for end, q in q_map.items() if prior_fye < end < fye]
+            # Q1-Q3 of this fiscal year end within ~11 months before fye
+            # (≈ -90/-180/-270 days); a day-span window is robust to 52/53-week
+            # fiscal drift where an exact same-MM-DD prior-year boundary is not.
+            parts = [
+                q for end, q in q_map.items()
+                if (sp := _span_days(end, fye)) is not None and 45 < sp < 330
+            ]
             if len(parts) != 3:
                 continue
             q_map[fye] = {
@@ -399,11 +426,13 @@ def build_filings_history(ticker: str) -> list[dict]:
         window = eps_ends[i - 3:i + 1]
         return sum(float(eps_q[e]["val"]) for e in window)
 
+    rev_ends = list(rev_q)
     filings: list[dict] = []
     for end, rev_rec in rev_q.items():
         revenue = float(rev_rec["val"])
         ni_rec = ni_q.get(end)
-        prior_rev = rev_q.get(_end_minus_one_year(end))
+        prior_end = _match_prior_year(end, rev_ends)
+        prior_rev = rev_q.get(prior_end) if prior_end else None
 
         net_income = float(ni_rec["val"]) if ni_rec else float("nan")
         equity = _instant_at(eq_rows, end)
