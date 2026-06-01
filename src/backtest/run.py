@@ -8,15 +8,15 @@ tests exercise with stubs.
     cached(run_backtest_supervisor)  ->  MultiAgentStrategy.decision_provider
     get_prices                       ->  run_backtest price_loader
     get_fundamentals_as_of           ->  run_backtest fundamentals_loader
-    sp500_as_of / recent_filing_dates -> point-in-time universe + event screen
+    nasdaq100_as_of / recent_filing_dates -> point-in-time universe + event screen
 
 Two modes:
 - Watchlist (default): the static --tickers, multi-agent analyzes them all.
     uv run python -m src.backtest.run
-- S&P 500 (the full funnel): point-in-time index membership -> event-driven
+- Nasdaq-100 (the full funnel): point-in-time index membership -> event-driven
   candidate screen (fresh quarterly filers + holdings) -> analysis. Seed caches
   with `python -m src.backtest.backfill` first; expect real LLM cost.
-    uv run python -m src.backtest.run --sp500 --dates ...
+    uv run python -m src.backtest.run --nasdaq100 --dates ...
 
 Specialist signals are cached on disk (signal cache), so re-runs are cheap until
 the prompts change (then bump --version).
@@ -56,7 +56,7 @@ from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of
-from src.data.universe import membership_end, sp500_as_of
+from src.data.universe import membership_end, nasdaq100_as_of
 from src.risk import RiskConfig
 
 load_dotenv()
@@ -109,7 +109,7 @@ def build_strategies(
     into a single batch wave rather than being gated by the live-path semaphore.
 
     fundamentals_loader / technicals_loader are the supervisor's own point-in-time
-    loaders; when None the supervisor uses its defaults (live, 5y). sp500 mode binds
+    loaders; when None the supervisor uses its defaults (live, 5y). nasdaq100 mode binds
     them to the cached "max" series so per-candidate analysis stays offline too.
 
     signal_versions overrides the cache version per specialist kind (the rest fall
@@ -167,7 +167,7 @@ async def run(
     tickers: list[str],
     dates: list[str],
     cache_version: str,
-    use_sp500: bool = False,
+    use_nasdaq100: bool = False,
     screen_lookback_days: int = 100,
     include_sentiment: bool = False,
     use_batch: bool = False,
@@ -182,13 +182,13 @@ async def run(
     # Anonymized signals must not collide with named ones in the cache — namespace them.
     if anonymize:
         cache_version = f"{cache_version}-anon"
-    # sp500 mode: point-in-time S&P 500 eligibility + event-driven candidate screen
+    # nasdaq100 mode: point-in-time Nasdaq-100 eligibility + event-driven candidate screen
     # (mandatory at ~500 names), run offline against the deep ("max") grabbed price
     # cache — coverage-filtered so a name with no cached prices is dropped rather
     # than triggering a live FMP fetch mid-run. Watchlist mode: the static --tickers,
     # no screen, 5y history (live-fetchable on a miss — the universe is tiny).
-    if use_sp500:
-        universe_loader = _covered_universe(sp500_as_of, "max")
+    if use_nasdaq100:
+        universe_loader = _covered_universe(nasdaq100_as_of, "max")
         price_loader = _cached_price_loader("max")
         # Both the replay's baseline pre-load and the supervisor's per-candidate
         # analysis read the as-of close from the cached "max" series — the grab only
@@ -203,12 +203,12 @@ async def run(
         technicals_loader = None  # supervisor default (live, 5y) is fine for the watchlist
         filing_dates_fn = None
     config = BacktestConfig(
-        universe=[] if use_sp500 else tickers,
+        universe=[] if use_nasdaq100 else tickers,
         decision_dates=sorted(dates),
         strategies=build_strategies(
             client, cache_version, filing_dates_fn, screen_lookback_days,
             include_sentiment, use_batch,
-            fundamentals_loader=fundamentals_loader if use_sp500 else None,
+            fundamentals_loader=fundamentals_loader if use_nasdaq100 else None,
             technicals_loader=technicals_loader,
             signal_versions=signal_versions,
             summary_version=summary_version,
@@ -245,7 +245,7 @@ def _truncating_price_loader(period: str):
 
 
 def _cached_price_loader(period: str):
-    """Offline loader (sp500 mode): cached history only, never a live FMP fetch.
+    """Offline loader (nasdaq100 mode): cached history only, never a live FMP fetch.
     A backtest replays grabbed data; an uncached name returns {} and is excluded
     upstream by _covered_universe, so the run can't stall on a live 402."""
     def loader(ticker: str) -> dict:
@@ -285,7 +285,7 @@ def print_summary(result: BacktestResult) -> None:
     spy = result.outcomes.get("spy_hold")
     spy_curve = spy.portfolio.equity_curve if spy else None
     # The SPY benchmark is only usable if it actually moved (it needs SPY prices,
-    # which the offline sp500 path may not have cached). A flat benchmark makes
+    # which the offline nasdaq100 path may not have cached). A flat benchmark makes
     # vs-SPY and alpha/beta meaningless — report that honestly instead of 0.00s.
     benchmark_usable = bool(spy_curve) and len({s.total_value for s in spy_curve}) > 1
 
@@ -377,13 +377,13 @@ def main() -> None:
              "so the costly map-reduce stays cached).",
     )
     parser.add_argument(
-        "--sp500", action="store_true",
-        help="Point-in-time S&P 500 universe + event-driven candidate screen "
+        "--nasdaq100", action="store_true",
+        help="Point-in-time Nasdaq-100 universe + event-driven candidate screen "
              "(vs the static --tickers watchlist). Backfill caches first.",
     )
     parser.add_argument(
         "--screen-lookback-days", type=int, default=100,
-        help="First-decision filing window for the event screen (sp500 mode).",
+        help="First-decision filing window for the event screen (nasdaq100 mode).",
     )
     parser.add_argument(
         "--sentiment", action="store_true",
@@ -394,7 +394,7 @@ def main() -> None:
         "--batch", action="store_true",
         help="Route all specialist LLM calls through the Message Batches API "
              "(coalesced, ~50%% cheaper, no per-minute throttle). Recommended for "
-             "the full S&P 500 run, especially with --sentiment.",
+             "the full Nasdaq-100 run, especially with --sentiment.",
     )
     # Transaction costs (applied to every fill, all strategies). Defaults model the
     # real intended broker — IBKR Pro Fixed, US stocks, Singapore account: $0.005/sh,
@@ -448,7 +448,7 @@ def main() -> None:
         "--max-llm-usd", type=float, default=None,
         help="Hard cap on estimated LLM spend for this run (USD). Aborts when crossed; "
              "computed signals are cached, so raise the cap and re-run to resume. "
-             "STRONGLY recommended for any --sp500 run.",
+             "STRONGLY recommended for any --nasdaq100 run.",
     )
     parser.add_argument(
         "--risk", action="store_true",
@@ -457,10 +457,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.sp500 and args.max_llm_usd is None:
+    if args.nasdaq100 and args.max_llm_usd is None:
         logger.warning(
-            "No --max-llm-usd cap set on an sp500 run. A full-index run can cost $100+; "
-            "set a cap to fail safe (the cache makes it resumable)."
+            "No --max-llm-usd cap set on a nasdaq100 run. A full-index run costs real "
+            "money; set a cap to fail safe (the cache makes it resumable)."
         )
 
     if args.anonymize and args.sentiment:
@@ -493,7 +493,10 @@ def main() -> None:
         if ver
     }
 
-    scope = "S&P 500 (PIT) + event screen" if args.sp500 else f"{len(args.tickers)} watchlist"
+    scope = (
+        "Nasdaq-100 (PIT) + event screen" if args.nasdaq100
+        else f"{len(args.tickers)} watchlist"
+    )
     sent = " + sentiment" if args.sentiment else ""
     mode = " [batch]" if args.batch else ""
     overrides = f" overrides={signal_versions}" if signal_versions else ""
@@ -503,7 +506,7 @@ def main() -> None:
         f"cache version={args.version}{overrides} | costs: {cost_model.describe()}"
     )
     result = asyncio.run(
-        run(args.tickers, dates, args.version, args.sp500,
+        run(args.tickers, dates, args.version, args.nasdaq100,
             args.screen_lookback_days, args.sentiment, args.batch,
             signal_versions=signal_versions or None, summary_version=args.summary_version,
             cost_model=cost_model, anonymize=args.anonymize, max_llm_usd=args.max_llm_usd,
@@ -519,7 +522,7 @@ def main() -> None:
     # count of variants behind any "edge" stays visible.
     if not args.no_runlog:
         config_summary = {
-            "universe": "sp500" if args.sp500 else "watchlist",
+            "universe": "nasdaq100" if args.nasdaq100 else "watchlist",
             "n_dates": len(dates), "first": min(dates), "last": max(dates),
             "sentiment": args.sentiment, "batch": args.batch,
             "version": args.version, "signal_versions": signal_versions or None,

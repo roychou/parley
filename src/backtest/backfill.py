@@ -1,5 +1,5 @@
 """
-Staggered data backfill for a full (S&P 500-scale) backtest.
+Staggered data backfill for a full (Nasdaq-100-scale) backtest.
 
 Seeds the on-disk caches the backtest reads from: prices (FMP), point-in-time
 fundamentals (EDGAR companyfacts), and filing dates (EDGAR submissions). Every
@@ -13,7 +13,7 @@ Rate-limit reality:
 - EDGAR has no daily cap (10 req/s); it throttles politely and finishes in one go.
 
 Run:  uv run python -m src.backtest.backfill --as-of 2026-01-14
-(defaults to the current S&P 500). Needs EDGAR_USER_AGENT and FMP_API_KEY set.
+(defaults to the current Nasdaq-100). Needs EDGAR_USER_AGENT and FMP_API_KEY set.
 
 Note: EDGAR companyfacts blobs are ~5MB each; ~500 names is a few GB of local
 cache (gitignored).
@@ -149,7 +149,8 @@ def _default_runner(
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Backfill caches for a full backtest.")
-    parser.add_argument("--as-of", default=None, help="S&P 500 date (YYYY-MM-DD); default current.")
+    parser.add_argument("--as-of", default=None,
+                        help="Nasdaq-100 date (YYYY-MM-DD); default current.")
     parser.add_argument("--start", default=None, help="Window start; with --end seeds the union.")
     parser.add_argument("--end", default=None, help="Window end (use with --start).")
     parser.add_argument("--tickers", nargs="+", default=None, help="Explicit tickers.")
@@ -160,18 +161,18 @@ def main() -> None:
     parser.add_argument("--skip-submissions", action="store_true")
     args = parser.parse_args()
 
-    from src.data.universe import current_sp500, sp500_as_of, sp500_members_in_range
+    from src.data.universe import current_nasdaq100, nasdaq100_as_of, nasdaq100_members_in_range
 
     if args.tickers:
         tickers = args.tickers
     elif args.start:
         # union over [start, end]; end defaults to today so --start alone works
         end = args.end or date.today().isoformat()
-        tickers = sp500_members_in_range(args.start, end)
+        tickers = nasdaq100_members_in_range(args.start, end)
     elif args.as_of:
-        tickers = sp500_as_of(args.as_of)
+        tickers = nasdaq100_as_of(args.as_of)
     else:
-        tickers = current_sp500()
+        tickers = current_nasdaq100()
 
     logger.info(f"Backfilling {len(tickers)} tickers (price_period={args.price_period}, "
                 f"fmp_cap={args.fmp_daily_cap})...")

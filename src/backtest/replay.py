@@ -61,7 +61,7 @@ class BacktestConfig:
     extra_tickers: list[str] = field(default_factory=lambda: ["SPY"])
     periods_per_year: int = 252  # daily equity curve (per MTM); Sharpe annualized daily
     # Point-in-time universe. When set, the eligible universe is recomputed each
-    # decision date (e.g. S&P 500 as-of). When None, the static `universe` is used
+    # decision date (e.g. Nasdaq-100 as-of). When None, the static `universe` is used
     # for every date (backward compatible).
     universe_loader: UniverseLoader | None = None
     # Transaction costs applied to every fill, for ALL strategies (the multi-agent

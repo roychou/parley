@@ -12,7 +12,7 @@ shares-at-fill × adjDividend is consistent. (FMP's `close` is split-adjusted on
 `adjClose`, the total-return series, was not stored — so there is no double-count.)
 
 Offline/cache-only: an unavailable ticker returns {} (no dividends modeled), never a
-live fetch — consistent with the rest of the sp500 backtest path.
+live fetch — consistent with the rest of the index backtest path.
 """
 from __future__ import annotations
 

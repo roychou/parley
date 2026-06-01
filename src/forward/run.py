@@ -39,7 +39,7 @@ from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of
-from src.data.universe import sp500_as_of
+from src.data.universe import nasdaq100_as_of
 from src.forward.decide import run_forward_decision
 from src.forward.ibkr import (
     FORWARD_PRICE_PERIOD,
@@ -167,7 +167,7 @@ async def run_forward_paper_session(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one weekly forward paper-trading session.")
     parser.add_argument("--tickers", nargs="+", default=None,
-                        help="Universe (default: current S&P 500).")
+                        help="Universe (default: current Nasdaq-100).")
     parser.add_argument("--as-of", default=date.today().isoformat(),
                         help="Decision date (default today).")
     parser.add_argument("--no-news", action="store_true", help="Disable the news specialist.")
@@ -181,7 +181,7 @@ def main() -> None:
                         help="Skip the IBKR pull (use the warm cache).")
     args = parser.parse_args()
 
-    tickers = args.tickers or sp500_as_of(args.as_of)
+    tickers = args.tickers or nasdaq100_as_of(args.as_of)
     logger.info(f"forward session as_of={args.as_of} | {len(tickers)} tickers | "
                 f"news={not args.no_news} risk={not args.no_risk} batch={not args.no_batch}")
     summary = asyncio.run(run_forward_paper_session(

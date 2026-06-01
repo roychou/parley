@@ -5,7 +5,7 @@ Why this exists:
 The backtest fans out hard. `MultiAgentStrategy.decide_all` gathers every screened
 candidate for a decision date at once, and each candidate's specialists fan out
 again (fundamentals + technicals, plus the sentiment scaffold's map→reduce→synthesis).
-At S&P 500 scale that launches dozens of tickers × several calls *concurrently* — well
+At index scale that launches dozens of tickers × several calls *concurrently* — well
 past tier-1 input-tokens-per-minute on both Haiku and Sonnet. The per-filing semaphore
 in the scaffold bounds one filing's burst; it can't bound the aggregate across tickers.
 
