@@ -4,7 +4,7 @@ import math
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # --- Logging & Config ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -140,7 +140,7 @@ def get_filings_history(ticker: str) -> list[dict]:
 
 def get_fundamentals_as_of(
     ticker: str, as_of_date: str, price_period: str = "5y"
-) -> Optional[ValuationSnapshot]:
+) -> ValuationSnapshot | None:
     """Returns the most recent filing available as of `as_of_date`, with P/E computed
     using the close price on (or most recently before) `as_of_date`.
 
@@ -199,7 +199,7 @@ def save_snapshot_to_cache(ticker: str, snapshot: ValuationSnapshot) -> None:
     logger.debug(f"Cached valuation snapshot for {ticker} at {path}")
 
 
-def load_latest_cache(ticker: str) -> Optional[ValuationSnapshot]:
+def load_latest_cache(ticker: str) -> ValuationSnapshot | None:
     """Loads the most recently cached fundamentals directly into the dataclass."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     matches = sorted(CACHE_DIR.glob(f"{ticker}_*.json"))

@@ -4,18 +4,18 @@ import asyncio
 import json
 import logging
 import sys
-from typing import Any, Dict, List
+from datetime import date
+from typing import Any
 
 from anthropic import AsyncAnthropic
 from anthropic.types import Message
 from dotenv import load_dotenv
-
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.agents._helpers import build_system_prompt
-from src.schemas.tools import GetTechnicalsInput
 from src.schemas.technicals import TechnicalsAnalysis
+from src.schemas.tools import GetTechnicalsInput
 
 # ==========================================
 # 0. PROJECT SETUP & LOGGING
@@ -57,7 +57,7 @@ Constraints:
 - The supporting_indicators dict MUST contain the actual values returned by the tool, keyed by indicator name.
 - Reasoning should reference specific indicator values from the tool.
 - Make sure to include the ticker symbol in your final output.
-- STRICT DATA ADHERENCE: If `sma_20` or `rsi_14` are returned as `null` by the tool, DO NOT invent, calculate, or estimate them. 
+- STRICT DATA ADHERENCE: If `sma_20` or `rsi_14` are returned as `null` by the tool, DO NOT invent, calculate, or estimate them.
 - MISSING DATA PROTOCOL: If indicators are null, your reasoning MUST state "Missing technical data." You must return a NEUTRAL signal with a confidence of 0.0.
 """
 
@@ -130,7 +130,7 @@ async def run_technicals_specialist(
         as_of = date.today().isoformat()  # Returns 'YYYY-MM-DD'
 
     system_prompt = build_system_prompt(TECHNICALS_ROLE_PROMPT)
-    messages: List[Dict[str, Any]] = [
+    messages: list[dict[str, Any]] = [
         {
             "role": "user",
             "content": f"Analyze {ticker} and produce a TechnicalsAnalysis up until an as_of date.",
@@ -150,7 +150,7 @@ async def run_technicals_specialist(
             messages=messages,
             tools=AGENT_TOOLS,
         )
-        
+
         logger.info(f"api_usage call_site=technicals_specialist input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens} model={MODEL}")
 
         # 2. Add assistant's response to history

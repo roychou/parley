@@ -8,11 +8,12 @@ Wraps the result in an EvalResult and returns it.
 """
 
 import json
-from typing import Any, List, Literal
-from pydantic import BaseModel, Field
-from anthropic import AsyncAnthropic
+from typing import Literal
 
-from src.evals.base import EvalProtocol, EvalResult
+from anthropic import AsyncAnthropic
+from pydantic import BaseModel, Field
+
+from src.evals.base import EvalResult
 from src.evals.judge import judge
 from src.schemas.fundamentals import FundamentalsAnalysis
 
@@ -28,7 +29,7 @@ class ClaimVerdict(BaseModel):
 
 class GroundingJudgment(BaseModel):
     """The strict format we expect the LLM Judge to return."""
-    claims: List[ClaimVerdict]
+    claims: list[ClaimVerdict]
     overall_passed: bool = Field(description="True only if ALL claims are GROUNDED.")
     summary: str = Field(description="1-2 sentences explaining the overall verdict.")
 
@@ -38,7 +39,7 @@ class GroundingJudgment(BaseModel):
 
 class GroundingEval:
     """Evaluates if a FundamentalsAnalysis hallucinates or misrepresents data."""
-    
+
     def __init__(self, client: AsyncAnthropic):
         self.client = client
         self.eval_name = "Fundamentals_GroundingEval"
@@ -52,7 +53,7 @@ class GroundingEval:
             "debt_to_equity": input_data.debt_to_equity,
             "as_of": input_data.as_of
         }
-        
+
         # 2. Build the Prompts exactly as specified
         system_prompt = """
             You are evaluating whether a financial analyst's reasoning is faithfully
@@ -91,7 +92,7 @@ class GroundingEval:
             - overall_passed: true only if ALL claims are GROUNDED
             - summary: 1-2 sentences explaining the verdict
         """
-        
+
         user_prompt = f"""
             SUPPORTING_FUNDAMENTALS:
             {json.dumps(evidence_dict, indent=2)}
@@ -111,7 +112,7 @@ class GroundingEval:
         )
 
         # 4. Map back to the generic EvalResult contract
-        # We calculate a fractional score based on the ratio of grounded claims, 
+        # We calculate a fractional score based on the ratio of grounded claims,
         # defaulting to 1.0 if there are no explicit data claims to grade.
         total_claims = len(judgment.claims)
         if total_claims > 0:
@@ -125,5 +126,5 @@ class GroundingEval:
             passed=judgment.overall_passed,
             score=score,
             ticker=getattr(input_data, 'ticker', None),
-            details=judgment.model_dump() 
+            details=judgment.model_dump()
         )

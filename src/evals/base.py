@@ -7,7 +7,8 @@ EvalRunner — a simple class or function that takes a list of Eval instances an
 
 """
 import asyncio
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Protocol
+
 from pydantic import BaseModel, Field
 
 # ==========================================
@@ -17,17 +18,17 @@ from pydantic import BaseModel, Field
 class EvalResult(BaseModel):
     """
     The standardized output format for all evaluations.
-    The details dict is the escape hatch for eval-specific structured output 
+    The details dict is the escape hatch for eval-specific structured output
     (e.g., the judge's explanation, which claims failed, etc.).
     """
     eval_name: str
     passed: bool
-    score: Optional[float] = None
-    ticker: Optional[str] = None
-    
-    # Using Field(default_factory=dict) ensures we always have an empty dict 
+    score: float | None = None
+    ticker: str | None = None
+
+    # Using Field(default_factory=dict) ensures we always have an empty dict
     # instead of None if an evaluator forgets to pass details.
-    details: Dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] = Field(default_factory=dict)
 
 # ==========================================
 # 2. EVALUATOR CONTRACT
@@ -36,7 +37,7 @@ class EvalResult(BaseModel):
 class EvalProtocol(Protocol):
     """
     Structural contract for any evaluator.
-    Whether it's an LLM Judge or a deterministic schema checker, 
+    Whether it's an LLM Judge or a deterministic schema checker,
     it just needs to implement this method.
     """
     async def run(self, input_data: Any) -> EvalResult:
@@ -48,23 +49,23 @@ class EvalProtocol(Protocol):
 
 class EvalRunner:
     """Orchestrator for running multiple evals against multiple inputs."""
-    
+
     @staticmethod
-    async def run_evals(evals: List[EvalProtocol], inputs: List[Any]) -> List[EvalResult]:
+    async def run_evals(evals: list[EvalProtocol], inputs: list[Any]) -> list[EvalResult]:
         """
         Executes every evaluator against every input concurrently.
         Returns a flattened list of all EvalResult objects.
         """
         tasks = []
-        
+
         # Build the Cartesian product of evals and inputs
         for eval_instance in evals:
             for input_data in inputs:
                 tasks.append(eval_instance.run(input_data))
-                
+
         # Fire them all off concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Filter out exceptions if an eval crashed, or handle them gracefully
         clean_results = []
         for r in results:
@@ -73,5 +74,5 @@ class EvalRunner:
                 print(f"Eval failed with error: {r}")
             else:
                 clean_results.append(r)
-                
+
         return clean_results

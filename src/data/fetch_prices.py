@@ -6,7 +6,6 @@ import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from src.data.fmp_client import get_historical_prices
 
@@ -43,18 +42,18 @@ class OHLCV:
 # ==========================================
 
 
-def parse_tickers(content: str) -> List[str]:
+def parse_tickers(content: str) -> list[str]:
     """Pure function to extract tickers from markdown content."""
     return re.findall(r"^- \[([A-Z]{1,5})\]", content, flags=re.MULTILINE)
 
 
-def transform_history_records(records: List[dict]) -> Dict[str, dict]:
+def transform_history_records(records: list[dict]) -> dict[str, dict]:
     """Pure function to map FMP's historical price list to our keyed dict format.
 
     FMP returns a list of {date, open, high, low, close, adjClose, volume, ...} dicts
     ordered most-recent first. We key by date string for fast lookup.
     """
-    out: Dict[str, dict] = {}
+    out: dict[str, dict] = {}
     for row in records:
         date_str = row["date"]  # FMP already formats as "YYYY-MM-DD"
         out[date_str] = asdict(OHLCV(
@@ -95,7 +94,7 @@ def _period_years(period: str) -> int:
     return 1
 
 
-def fetch_raw_history(ticker: str, period: str = "1y") -> List[dict]:
+def fetch_raw_history(ticker: str, period: str = "1y") -> list[dict]:
     """Fetches raw history from FMP, bounded to the last `period` window.
 
     Accepts "1y", "5y", "30y", "max", etc. Deep history (>5y) needs a paid FMP
@@ -111,7 +110,7 @@ def fetch_raw_history(ticker: str, period: str = "1y") -> List[dict]:
     return records
 
 
-def save_prices_to_cache(ticker: str, data: Dict[str, dict], period: str = "1y") -> None:
+def save_prices_to_cache(ticker: str, data: dict[str, dict], period: str = "1y") -> None:
     """Saves the transformed dictionary to disk, keyed by ticker + period + date.
 
     The period is part of the key so a shallow (1y) cache never silently
@@ -126,7 +125,7 @@ def save_prices_to_cache(ticker: str, data: Dict[str, dict], period: str = "1y")
         json.dump(data, f, indent=2)
 
 
-def load_latest_cache(ticker: str, period: str = "1y") -> Optional[Dict[str, dict]]:
+def load_latest_cache(ticker: str, period: str = "1y") -> dict[str, dict] | None:
     """Loads the most recently cached JSON for a given ticker at the given period depth."""
     if not CACHE_DIR.exists():
         return None
@@ -148,7 +147,7 @@ def load_latest_cache(ticker: str, period: str = "1y") -> Optional[Dict[str, dic
 # ==========================================
 
 
-def process_ticker(ticker: str, period: str = "1y") -> Dict[str, dict]:
+def process_ticker(ticker: str, period: str = "1y") -> dict[str, dict]:
     """Pipeline to forcibly Fetch -> Transform -> Cache."""
     logger.info(f"Fetching fresh data for {ticker} (period={period})...")
     raw = fetch_raw_history(ticker, period)
@@ -157,7 +156,7 @@ def process_ticker(ticker: str, period: str = "1y") -> Dict[str, dict]:
     return records
 
 
-def get_prices(ticker: str, period: str = "1y") -> Dict[str, dict]:
+def get_prices(ticker: str, period: str = "1y") -> dict[str, dict]:
     """
     Primary data access method for downstream modules (technicals, etc.).
     Tries to load from cache; if missing, automatically fetches and caches.

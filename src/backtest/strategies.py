@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date as _date
 from datetime import timedelta
-from typing import Awaitable, Callable, Literal, Protocol
+from typing import Literal, Protocol
 
 from src.backtest.portfolio import Portfolio
 from src.backtest.screen import FilingDatesFn, select_candidates

@@ -24,8 +24,9 @@ this: a Decision is now always re-synthesized from the (cached) signals.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel
 
@@ -72,7 +73,7 @@ class SignalCache:
         return self.root / kind / self.version_for(kind) / f"{ticker}_{data_version}.json"
 
 
-async def cached_signal(
+async def cached_signal[M: BaseModel](
     cache: SignalCache | None,
     kind: str,
     ticker: str,

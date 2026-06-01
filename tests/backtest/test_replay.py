@@ -12,7 +12,6 @@ from src.data.fundamentals import ValuationSnapshot
 from src.schemas import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
 
-
 # ==========================================
 # FIXTURES
 # ==========================================

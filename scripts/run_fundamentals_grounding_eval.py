@@ -1,9 +1,10 @@
 import asyncio
 from datetime import date
+
 from anthropic import AsyncAnthropic
 
-from src.agents.fundamentals_specialist import run_fundamentals_specialist
 from evals.fundamentals import GroundingEval
+from src.agents.fundamentals_specialist import run_fundamentals_specialist
 
 TICKERS = ["MSFT", "TSLA", "NVDA"]
 AS_OF = date(2026, 5, 12)  # or whatever your cached fundamentals date is

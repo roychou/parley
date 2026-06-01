@@ -1,6 +1,7 @@
 import json
-from pydantic import BaseModel, Field
+
 from anthropic import AsyncAnthropic
+from pydantic import BaseModel, Field
 
 from src.evals.base import EvalResult
 from src.evals.judge import judge

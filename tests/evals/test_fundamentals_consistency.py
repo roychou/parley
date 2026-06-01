@@ -1,4 +1,5 @@
 import pytest
+
 from evals.fundamentals.consistency import ConsistencyEval
 from src.schemas.fundamentals import FundamentalsAnalysis
 

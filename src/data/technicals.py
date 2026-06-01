@@ -1,6 +1,6 @@
-import pandas as pd
-from typing import Dict, List, Union
 from dataclasses import dataclass
+
+import pandas as pd
 
 # IMPORT FIX: Grab the process_ticker function and alias it so it doesn't clash
 from src.data.fetch_prices import get_prices
@@ -10,14 +10,14 @@ from src.data.fetch_prices import get_prices
 # ==========================================
 
 
-def sma(prices: Union[List[float], pd.Series], window: int) -> pd.Series:
+def sma(prices: list[float] | pd.Series, window: int) -> pd.Series:
     """Calculates the Simple Moving Average (SMA)."""
     if isinstance(prices, list):
         prices = pd.Series(prices, dtype=float)
     return prices.rolling(window=window).mean()
 
 
-def rsi(prices: Union[List[float], pd.Series], window: int = 14) -> pd.Series:
+def rsi(prices: list[float] | pd.Series, window: int = 14) -> pd.Series:
     """
     Calculates the Relative Strength Index (RSI).
 
@@ -49,7 +49,7 @@ class TechnicalsSnapshot:
     """Immutable data record containing the latest technical indicators."""
 
     as_of: str
-    date_range: Dict[str, str]
+    date_range: dict[str, str]
     current_price: float
     sma_20: float
     rsi_14: float

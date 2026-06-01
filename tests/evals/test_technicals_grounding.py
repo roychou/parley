@@ -1,6 +1,7 @@
 import pytest
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
+
 from evals.technicals.grounding import TechnicalsGroundingEval
 from src.schemas.technicals import TechnicalsAnalysis
 
@@ -52,21 +53,21 @@ async def test_tech_grounding_numeric_interpretation_inversion(technicals_eval):
         rsi_14=25.0,
         reasoning="An RSI of 25 suggests strong overbought conditions, signaling a sell."
     )
-    
+
     result = await technicals_eval.run(analysis)
-    
+
     assert result.passed is False, "Eval should have failed due to inverted RSI interpretation."
-    
+
     claims = result.details.get("claims", [])
     assert len(claims) > 0, "Judge failed to extract any claims."
-    
+
     caught = False
     for claim in claims:
-        if (claim["verdict"] == "UNGROUNDED" and 
+        if (claim["verdict"] == "UNGROUNDED" and
             "25" in claim["claim_text"]):
             caught = True
             break
-            
+
     assert caught, f"Judge failed to flag the inverted numeric interpretation. Claims: {claims}"
 
 @pytest.mark.asyncio
@@ -81,14 +82,14 @@ async def test_tech_grounding_pattern_missing_prereqs(technicals_eval):
         current_price=150.0,
         reasoning="A death cross formed as the 50-day SMA crossed below the 200-day SMA, signaling bearish momentum."
     )
-    
+
     result = await technicals_eval.run(analysis)
-    
+
     assert result.passed is False, "Eval should have failed due to missing pattern prerequisites."
-    
+
     claims = result.details.get("claims", [])
     assert len(claims) > 0, "Judge failed to extract any claims."
-    
+
     caught = False
     for claim in claims:
         if claim["verdict"] == "UNGROUNDED":
@@ -113,19 +114,19 @@ async def test_tech_grounding_directional_without_history(technicals_eval):
         sma_20=148.0,
         reasoning="Momentum has been steadily building over the past three weeks, with the trend reversing from bearish to bullish."
     )
-    
+
     result = await technicals_eval.run(analysis)
-    
+
     assert result.passed is False, "Eval should have failed due to lack of temporal data for the trend claim."
-    
+
     claims = result.details.get("claims", [])
     assert len(claims) > 0, "Judge failed to extract any claims."
-    
+
     caught = False
     for claim in claims:
-        if (claim["verdict"] == "UNGROUNDED" and 
+        if (claim["verdict"] == "UNGROUNDED" and
             "three weeks" in claim["claim_text"].lower()):
             caught = True
             break
-            
+
     assert caught, f"Judge failed to flag the unsupported temporal claim. Claims: {claims}"

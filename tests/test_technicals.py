@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+
 from src.data.technicals import sma
 
 

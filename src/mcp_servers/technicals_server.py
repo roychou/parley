@@ -5,6 +5,7 @@ import traceback
 from dataclasses import asdict
 
 from mcp.server.fastmcp import FastMCP
+
 from src.data.technicals import process_ticker
 
 # Set up logging so we can actually see the Python stack traces in our terminal

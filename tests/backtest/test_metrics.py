@@ -1,4 +1,3 @@
-import math
 
 import pytest
 
@@ -11,7 +10,6 @@ from src.backtest.metrics import (
     total_return,
 )
 from src.backtest.portfolio import EquitySnapshot, Trade
-
 
 # ==========================================
 # TOTAL_RETURN

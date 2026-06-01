@@ -1,11 +1,12 @@
 import json
-from typing import List, Literal
-from pydantic import BaseModel, Field
-from anthropic import AsyncAnthropic
+from typing import Literal
 
-from src.evals.base import EvalProtocol, EvalResult
+from anthropic import AsyncAnthropic
+from pydantic import BaseModel, Field
+
+from src.evals.base import EvalResult
 from src.evals.judge import judge
-from src.schemas.technicals import TechnicalsAnalysis # Assuming this is your output schema
+from src.schemas.technicals import TechnicalsAnalysis  # Assuming this is your output schema
 
 # ==========================================
 # 1. THE JUDGMENT SCHEMAS
@@ -23,7 +24,7 @@ class TechnicalClaimVerdict(BaseModel):
     )
 
 class TechnicalGroundingJudgment(BaseModel):
-    claims: List[TechnicalClaimVerdict]
+    claims: list[TechnicalClaimVerdict]
     overall_passed: bool = Field(description="True only if ALL claims are GROUNDED.")
     summary: str = Field(
         default="No summary provided.",
@@ -36,7 +37,7 @@ class TechnicalGroundingJudgment(BaseModel):
 
 class TechnicalsGroundingEval:
     """Evaluates if a TechnicalsAnalysis hallucinates data, patterns, or trends."""
-    
+
     def __init__(self, client: AsyncAnthropic):
         self.client = client
         self.eval_name = "Technicals_GroundingEval"
@@ -51,7 +52,7 @@ class TechnicalsGroundingEval:
             "date_range": getattr(input_data, "date_range", {}),
             "as_of": getattr(input_data, "as_of", None)
         }
-        
+
         # 2. Build the Multi-Layered Prompt
         system_prompt = """
 You are evaluating whether a quantitative analyst's technical reasoning is faithfully grounded in the supporting data they were given.
@@ -82,7 +83,7 @@ Return your verdict as a structured judgment with:
 - overall_passed: true only if ALL claims are GROUNDED
 - summary: 1-2 sentences explaining the verdict
 """
-        
+
         user_prompt = f"""
             SUPPORTING_TECHNICALS:
             {json.dumps(evidence_dict, indent=2)}
@@ -114,5 +115,5 @@ Return your verdict as a structured judgment with:
             passed=judgment.overall_passed,
             score=score,
             ticker=getattr(input_data, 'ticker', None),
-            details=judgment.model_dump() 
+            details=judgment.model_dump()
         )

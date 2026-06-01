@@ -3,8 +3,8 @@ from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from evals.synthesis.grounding import SynthesisGroundingEval
-from src.schemas.signal import Decision
 from src.schemas.fundamentals import FundamentalsAnalysis
+from src.schemas.signal import Decision
 from src.schemas.technicals import TechnicalsAnalysis
 
 load_dotenv()

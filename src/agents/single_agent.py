@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from src.data.technicals import rsi, sma
+from src.schemas.tools import GetTechnicalsInput
 
 load_dotenv()
 

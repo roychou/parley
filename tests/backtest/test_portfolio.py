@@ -2,7 +2,6 @@ import pytest
 
 from src.backtest.portfolio import Portfolio
 
-
 # ==========================================
 # OPEN
 # ==========================================

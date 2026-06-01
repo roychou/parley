@@ -4,19 +4,18 @@ import asyncio
 import json
 import logging
 import sys
-from pathlib import Path
-from typing import Any, Dict, List
+from datetime import date
+from typing import Any
 
 from anthropic import AsyncAnthropic
 from anthropic.types import Message
 from dotenv import load_dotenv
-
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.agents._helpers import build_system_prompt
-from src.schemas.tools import GetFundamentalsInput
 from src.schemas.fundamentals import FundamentalsAnalysis
+from src.schemas.tools import GetFundamentalsInput
 
 # ==========================================
 # 0. PROJECT SETUP & LOGGING
@@ -133,7 +132,7 @@ async def run_fundamentals_specialist(
         as_of = date.today().isoformat()  # Returns 'YYYY-MM-DD'
 
     system_prompt = build_system_prompt(FUNDAMENTALS_ROLE_PROMPT)
-    messages: List[Dict[str, Any]] = [
+    messages: list[dict[str, Any]] = [
         {
             "role": "user",
             "content": f"Analyze {ticker} and produce a FundamentalsAnalysis up until an as_of date.",

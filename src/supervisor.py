@@ -1,14 +1,14 @@
 import asyncio
 import logging
 import sys
+from datetime import date
 
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
-from datetime import date
-from src.schemas import Decision
 from src.agents.fundamentals_specialist import run_fundamentals_specialist
 from src.agents.technicals_specialist import run_technicals_specialist
+from src.schemas import Decision
 from src.synthesis import synthesize
 
 load_dotenv()

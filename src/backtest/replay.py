@@ -26,8 +26,8 @@ Two sequencing invariants worth being explicit about:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
 
 from src.backtest.costs import CostModel
 from src.backtest.portfolio import Portfolio

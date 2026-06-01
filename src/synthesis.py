@@ -1,6 +1,6 @@
 import logging
 
-from src.schemas import SpecialistSignal, Decision
+from src.schemas import Decision, SpecialistSignal
 
 logging.basicConfig(
     level=logging.INFO,
