@@ -199,6 +199,10 @@ persistent infra (VM + IBC + cron) only when going real-money.
   persist for one date. The harness the adapters plug into.
 - `src/agents/news_specialist.py` — news specialist (`NewsAnalysis`) +
   `combine_news_sources` (multi-source merge; curated feeds only, no open-social).
+- `src/forward/run.py` — the **wiring entrypoint**: connect IBKR -> refresh caches ->
+  build the decision provider (budget-capped, batch) -> run_forward_session -> save.
+  `python -m src.forward.run --max-llm-usd N`. Cache-derived helpers tested; live
+  orchestration needs a Gateway.
 - `src/forward/ibkr.py` — IBKR **price** (`refresh_price_cache`) + **news**
   (`fetch_news_for` + `news_source_from_store`) adapters, refresh/ingest pattern,
   host/port-configurable (env). Pure converters unit-tested; **ib_async IO needs LIVE
@@ -206,12 +210,11 @@ persistent infra (VM + IBC + cron) only when going real-money.
 - LLM **spend cap** (`--max-llm-usd`, `src/backtest/budget.py`) — added after a
   validation run overran to ~$120; aborts at the cap, resumes from the warm cache.
 
-**Remaining to run forward (data-only, no execution yet):**
-1. **Wiring entrypoint** — connect → refresh prices/news for candidates →
-   `run_forward_session` with cost-cap → disconnect (a weekly command). *Live-testable
-   only with a Gateway, so deferred until the operator stands one up.*
-2. **Operator setup** — IB Gateway (paper) + US market-data subscription (~$10/mo) +
+**Remaining to run forward:**
+1. **Operator setup** — IB Gateway (paper) + US market-data subscription (~$10/mo) +
    Anthropic credits topped up.
+2. **Live validation** — run a session, confirm IBKR price/news adapters return real
+   bars + headlines, reconcile sizing/execution.
 3. **Later** — IBKR **execution** adapter (place paper orders) + scheduler (cron/launchd).
 
 **Immediate next step (next session):** operator spins up IB Gateway (paper) + data
