@@ -13,7 +13,10 @@ from src.schemas.signal import Decision
 
 class SynthesisJudgment(BaseModel):
     direction_aligned: bool = Field(
-        description="True if the Decision's direction (BUY/HOLD/SELL) matches what the specialist signals collectively imply."
+        description=(
+            "True if the Decision's direction (BUY/HOLD/SELL) matches what the "
+            "specialist signals collectively imply."
+        )
     )
     direction_reasoning: str = Field(
         description="Why direction is or isn't aligned with the collective weight of the signals."
@@ -26,16 +29,28 @@ class SynthesisJudgment(BaseModel):
         )
     )
     disagreement_reasoning: str = Field(
-        description="Which specialists conflict (if any) and whether the decision handles that conflict appropriately."
+        description=(
+            "Which specialists conflict (if any) and whether the decision handles "
+            "that conflict appropriately."
+        )
     )
     rationale_covers_all: bool = Field(
-        description="True if the rationale references every contributing specialist by name or role."
+        description=(
+            "True if the rationale references every contributing specialist by name "
+            "or role."
+        )
     )
     rationale_reasoning: str = Field(
-        description="Which specialists are referenced in the rationale and which (if any) are absent."
+        description=(
+            "Which specialists are referenced in the rationale and which (if any) "
+            "are absent."
+        )
     )
     overall_passed: bool = Field(
-        description="True only if ALL three dimensions pass: direction_aligned, disagreement_handled, and rationale_covers_all."
+        description=(
+            "True only if ALL three dimensions pass: direction_aligned, "
+            "disagreement_handled, and rationale_covers_all."
+        )
     )
     summary: str = Field(description="1-2 sentences explaining the overall verdict.")
 
@@ -67,30 +82,38 @@ class SynthesisGroundingEval:
             "rationale": decision.rationale,
         }
 
-        system_prompt = """You are evaluating whether a multi-specialist investment synthesis decision correctly reflects its input signals.
+        system_prompt = """You are evaluating whether a multi-specialist investment synthesis \
+decision correctly reflects its input signals.
 
 You will receive:
-1. SPECIALIST_SIGNALS: outputs from individual specialist agents, each with a signal direction (BULLISH/BEARISH/NEUTRAL), confidence (0.0–1.0), and reasoning.
+1. SPECIALIST_SIGNALS: outputs from individual specialist agents, each with a signal direction \
+(BULLISH/BEARISH/NEUTRAL), confidence (0.0–1.0), and reasoning.
 2. THE_DECISION: the synthesized decision — direction (BUY/HOLD/SELL), confidence, and rationale.
 
-You are NOT judging whether the direction is fundamentally correct for the stock. You are judging whether the synthesis process handled the specialist inputs accurately.
+You are NOT judging whether the direction is fundamentally correct for the stock. You are \
+judging whether the synthesis process handled the specialist inputs accurately.
 
 Evaluate THREE dimensions:
 
 DIMENSION 1 — Direction Alignment
 Does the Decision's direction match what the specialist signals collectively imply?
-- Weigh each specialist's signal by their confidence. BULLISH@0.9 + BEARISH@0.8 is nearly balanced (net ≈ 0.05) and implies HOLD, not BUY or SELL. BULLISH@0.8 + BULLISH@0.6 strongly implies BUY.
+- Weigh each specialist's signal by their confidence. BULLISH@0.9 + BEARISH@0.8 is nearly \
+balanced (net ≈ 0.05) and implies HOLD, not BUY or SELL. BULLISH@0.8 + BULLISH@0.6 strongly \
+implies BUY.
 - direction_aligned is True if the direction is consistent with the collective signal weight.
 
 DIMENSION 2 — Disagreement Handling
 When specialists disagree (e.g., one BULLISH and one BEARISH):
-- The Decision's confidence must be low (a high-confidence BUY or SELL when signals conflict is a synthesis failure — it ignores evidence).
+- The Decision's confidence must be low (a high-confidence BUY or SELL when signals conflict is \
+a synthesis failure — it ignores evidence).
 - The rationale must acknowledge the disagreement between specialists.
-- disagreement_handled is True if both conditions hold, OR if all specialists agree (there is no disagreement to handle).
+- disagreement_handled is True if both conditions hold, OR if all specialists agree (there is \
+no disagreement to handle).
 
 DIMENSION 3 — Rationale Coverage
 Every contributing specialist must be referenced in the rationale.
-- rationale_covers_all is True if each specialist named in SPECIALIST_SIGNALS appears in the rationale (by name, role, or signal type).
+- rationale_covers_all is True if each specialist named in SPECIALIST_SIGNALS appears in the \
+rationale (by name, role, or signal type).
 
 overall_passed is True only if ALL THREE dimensions pass."""
 

@@ -103,6 +103,9 @@ async def test_synthesis_disagreement_blindness(synthesis_eval):
 
     # Assert on evidence-of-detection: judge must cite the conflict
     disagreement_text = result.details.get("disagreement_reasoning", "").lower()
-    assert any(kw in disagreement_text for kw in ["disagree", "conflict", "bearish", "technicals"]), (
-        f"Judge should cite the specialist conflict in disagreement_reasoning. Got: {disagreement_text}"
+    assert any(
+        kw in disagreement_text for kw in ["disagree", "conflict", "bearish", "technicals"]
+    ), (
+        f"Judge should cite the specialist conflict in disagreement_reasoning. "
+        f"Got: {disagreement_text}"
     )

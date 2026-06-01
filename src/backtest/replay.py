@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 
 
 PriceLoader = Callable[[str], dict[str, dict]]  # ticker -> {date -> ohlcv dict}
-FundamentalsLoader = Callable[[str, str], ValuationSnapshot | None]  # (ticker, date) -> snapshot or None
+# (ticker, date) -> snapshot or None
+FundamentalsLoader = Callable[[str, str], ValuationSnapshot | None]
 UniverseLoader = Callable[[str], list[str]]  # date -> eligible tickers as of that date
 DividendsLoader = Callable[[str], dict[str, float]]  # ticker -> {ex_date -> div/share}
 
@@ -56,7 +57,8 @@ class BacktestConfig:
     strategies: list[Strategy]
     initial_cash: float = 100_000.0
     stop_loss_pct: float | None = -0.20
-    extra_tickers: list[str] = field(default_factory=lambda: ["SPY"])  # baseline tickers outside the universe
+    # baseline tickers outside the universe
+    extra_tickers: list[str] = field(default_factory=lambda: ["SPY"])
     periods_per_year: int = 252  # daily equity curve (per MTM); Sharpe annualized daily
     # Point-in-time universe. When set, the eligible universe is recomputed each
     # decision date (e.g. S&P 500 as-of). When None, the static `universe` is used
@@ -250,7 +252,9 @@ def _execute_actions(
     for action in actions:
         price = prices.get(action.ticker)
         if price is None:
-            logger.debug(f"skipping action {action.kind} {action.ticker}@{date}: no price available")
+            logger.debug(
+                f"skipping action {action.kind} {action.ticker}@{date}: no price available"
+            )
             continue
         if action.kind == "OPEN":
             dollars = portfolio_value_for_sizing * action.position_size_pct

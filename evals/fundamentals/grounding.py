@@ -1,5 +1,6 @@
 """
-src/evals/fundamentals/grounding.py holds GroundingEval. It implements the Eval protocol. Its run method:
+src/evals/fundamentals/grounding.py holds GroundingEval. It implements the Eval protocol.
+Its run method:
 
 Takes a FundamentalsAnalysis (the specialist's output) as input.
 Builds the judge prompt from the analysis's reasoning and supporting_fundamentals.
@@ -25,7 +26,9 @@ class ClaimVerdict(BaseModel):
     """Evaluates a single factual claim extracted from the reasoning."""
     claim_text: str = Field(description="The specific factual claim extracted from the reasoning.")
     verdict: Literal["GROUNDED", "UNGROUNDED"]
-    explanation: str = Field(description="Why the claim is grounded or ungrounded based on the data.")
+    explanation: str = Field(
+        description="Why the claim is grounded or ungrounded based on the data."
+    )
 
 class GroundingJudgment(BaseModel):
     """The strict format we expect the LLM Judge to return."""

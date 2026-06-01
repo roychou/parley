@@ -119,7 +119,9 @@ class Portfolio:
         non-positive dollars or price.
         """
         if dollars <= 0 or price <= 0:
-            logger.warning(f"open rejected: invalid dollars={dollars} or price={price} for {ticker}")
+            logger.warning(
+                f"open rejected: invalid dollars={dollars} or price={price} for {ticker}"
+            )
             return False
         if not self.can_open(ticker):
             logger.debug(f"open rejected: cannot open {ticker} (held or at max)")

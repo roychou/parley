@@ -32,10 +32,13 @@ def test_get_fundamentals_as_of_picks_most_recent_eligible_filing(monkeypatch, t
     monkeypatch.setattr(
         fund_mod,
         "_get_prices_dict",
-        lambda ticker, period="5y": {"2024-09-15": {"close": 420.0}, "2024-09-16": {"close": 425.0}},
+        lambda ticker, period="5y": {
+            "2024-09-15": {"close": 420.0}, "2024-09-16": {"close": 425.0}
+        },
     )
 
-    # As of 2024-09-15: latest eligible filing is 2024-07-30 (NOT 2025-07-30 — that hadn't happened yet)
+    # As of 2024-09-15: latest eligible filing is 2024-07-30
+    # (NOT 2025-07-30 — that hadn't happened yet)
     snap = get_fundamentals_as_of("TEST", "2024-09-15")
     assert snap is not None
     assert snap.report_date == "2024-07-30"

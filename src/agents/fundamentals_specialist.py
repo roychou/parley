@@ -39,7 +39,8 @@ MAX_AGENT_TURNS = 10
 # ==========================================
 
 FUNDAMENTALS_ROLE_PROMPT = """
-You are a fundamentals analyst. Your task is to produce a FundamentalsAnalysis for the requested ticker based on the ticker's fundamentals.
+You are a fundamentals analyst. Your task is to produce a FundamentalsAnalysis for the \
+requested ticker based on the ticker's fundamentals.
 
 Workflow:
 1. Call get_fundamentals(ticker) to retrieve the latest fundamentals up until the as_of date.
@@ -57,15 +58,19 @@ Fundamentals rules:
 Synthesis rules:
 - high P/E + high revenue growth + healthy margin = justified premium
 - low P/E + declining revenue + high D/E = value trap
-- If signals are mixed, reasoning must enumerate which metrics point bullish vs bearish before stating overall confidence.
+- If signals are mixed, reasoning must enumerate which metrics point bullish vs bearish before \
+stating overall confidence.
 - strong margin + low D/E + moderate growth = healthy fundamentals, bullish
 - negative or single-digit growth + margin compression = bearish regardless of P/E
 - high growth + thin margin + high D/E = aggressive expansion, neutral with high uncertainty
 
 Constraints:
-- The price_date field in your output MUST match the price_date from the tool result. Do not invent or infer dates.
-- The supporting_fundamentals dict MUST contain the actual values returned by the tool, keyed by indicator name.
-- Data is annual filings, up to 15 months stale. Reason about company trajectory through the last reported period, not today.
+- The price_date field in your output MUST match the price_date from the tool result. Do not \
+invent or infer dates.
+- The supporting_fundamentals dict MUST contain the actual values returned by the tool, keyed \
+by indicator name.
+- Data is annual filings, up to 15 months stale. Reason about company trajectory through the \
+last reported period, not today.
 - Reasoning should reference specific fundamentals values from the tool.
 - Make sure to include the ticker symbol in your final output.
 """
@@ -78,7 +83,10 @@ AGENT_TOOLS = [
     },
     {
         "name": "submit_analysis",
-        "description": "Submit your final FundamentalsAnalysis for the ticker. Call this exactly once.",
+        "description": (
+            "Submit your final FundamentalsAnalysis for the ticker. "
+            "Call this exactly once."
+        ),
         "input_schema": FundamentalsAnalysis.model_json_schema(),
     },
 ]
@@ -135,7 +143,10 @@ async def run_fundamentals_specialist(
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": f"Analyze {ticker} and produce a FundamentalsAnalysis up until an as_of date.",
+            "content": (
+                f"Analyze {ticker} and produce a FundamentalsAnalysis "
+                "up until an as_of date."
+            ),
         }
     ]
 
@@ -153,7 +164,11 @@ async def run_fundamentals_specialist(
             tools=AGENT_TOOLS,
         )
 
-        logger.info(f"api_usage call_site=fundamentals_specialist input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens} model={MODEL}")
+        logger.info(
+            f"api_usage call_site=fundamentals_specialist "
+            f"input_tokens={response.usage.input_tokens} "
+            f"output_tokens={response.usage.output_tokens} model={MODEL}"
+        )
 
         # 2. Add assistant's response to history
         messages.append({"role": "assistant", "content": response.content})

@@ -39,10 +39,12 @@ MAX_AGENT_TURNS = 10
 # ==========================================
 
 TECHNICALS_ROLE_PROMPT = """
-You are a technical analyst. Your task is to produce a TechnicalsAnalysis for the requested ticker based on technical indicators.
+You are a technical analyst. Your task is to produce a TechnicalsAnalysis for the requested \
+ticker based on technical indicators.
 
 Workflow:
-1. Call get_technicals(ticker) to retrieve the latest indicators and date envelope up until the as_of date.
+1. Call get_technicals(ticker) to retrieve the latest indicators and date envelope up until the \
+as_of date.
 2. Interpret the indicators using the rules below.
 3. Produce a TechnicalsAnalysis as your final output using submit_analysis.
 
@@ -50,15 +52,20 @@ Indicator rules:
 - RSI-14 above 70 indicates overbought conditions (bearish pressure).
 - RSI-14 below 30 indicates oversold conditions (bullish pressure).
 - Price above SMA-20 indicates bullish trend; below indicates bearish trend.
-- When indicators conflict, weight the trend (SMA) over momentum (RSI) and reflect uncertainty in confidence.
+- When indicators conflict, weight the trend (SMA) over momentum (RSI) and reflect uncertainty \
+in confidence.
 
 Constraints:
-- The as_of field in your output MUST match the as_of from the tool result. Do not invent or infer dates.
-- The supporting_indicators dict MUST contain the actual values returned by the tool, keyed by indicator name.
+- The as_of field in your output MUST match the as_of from the tool result. Do not invent or \
+infer dates.
+- The supporting_indicators dict MUST contain the actual values returned by the tool, keyed by \
+indicator name.
 - Reasoning should reference specific indicator values from the tool.
 - Make sure to include the ticker symbol in your final output.
-- STRICT DATA ADHERENCE: If `sma_20` or `rsi_14` are returned as `null` by the tool, DO NOT invent, calculate, or estimate them.
-- MISSING DATA PROTOCOL: If indicators are null, your reasoning MUST state "Missing technical data." You must return a NEUTRAL signal with a confidence of 0.0.
+- STRICT DATA ADHERENCE: If `sma_20` or `rsi_14` are returned as `null` by the tool, DO NOT \
+invent, calculate, or estimate them.
+- MISSING DATA PROTOCOL: If indicators are null, your reasoning MUST state "Missing technical \
+data." You must return a NEUTRAL signal with a confidence of 0.0.
 """
 
 AGENT_TOOLS = [
@@ -151,7 +158,11 @@ async def run_technicals_specialist(
             tools=AGENT_TOOLS,
         )
 
-        logger.info(f"api_usage call_site=technicals_specialist input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens} model={MODEL}")
+        logger.info(
+            f"api_usage call_site=technicals_specialist "
+            f"input_tokens={response.usage.input_tokens} "
+            f"output_tokens={response.usage.output_tokens} model={MODEL}"
+        )
 
         # 2. Add assistant's response to history
         messages.append({"role": "assistant", "content": response.content})

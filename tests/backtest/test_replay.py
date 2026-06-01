@@ -50,7 +50,8 @@ def _decision(ticker: str, direction: str, confidence: float) -> Decision:
         ticker=ticker,
         signal="BULLISH" if direction == "BUY" else "BEARISH" if direction == "SELL" else "NEUTRAL",
         confidence=confidence,
-        reasoning="Synthetic reasoning padded to satisfy the min_length=50 constraint on the SpecialistSignal.",
+        reasoning="Synthetic reasoning padded to satisfy the min_length=50 "
+        "constraint on the SpecialistSignal.",
         as_of="2026-01-09",
         rev_growth_yoy=0.10,
         pe_ratio=18.0,
@@ -61,7 +62,8 @@ def _decision(ticker: str, direction: str, confidence: float) -> Decision:
         ticker=ticker,
         direction=direction,
         confidence=confidence,
-        rationale="Synthetic rationale padded to satisfy the min_length=50 constraint on the Decision.",
+        rationale="Synthetic rationale padded to satisfy the min_length=50 "
+        "constraint on the Decision.",
         contributing_signals=[signal],
         as_of="2026-01-09",
     )
@@ -215,8 +217,10 @@ async def test_closes_execute_before_opens_in_same_round():
         # Track trades to verify the C,D opens happened.
         t.ticker for t in outcome.portfolio.closed_trades
     }
-    assert {"A", "B", "C", "D"}.issubset(open_tickers_at_end), \
-        f"Expected all four tickers to have been opened at some point. Got trades on: {open_tickers_at_end}"
+    assert {"A", "B", "C", "D"}.issubset(open_tickers_at_end), (
+        f"Expected all four tickers to have been opened at some point. "
+        f"Got trades on: {open_tickers_at_end}"
+    )
 
 
 @pytest.mark.asyncio

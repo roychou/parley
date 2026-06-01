@@ -17,7 +17,8 @@ class NewsAnalysis(SpecialistSignal):
 
     # Evidence
     overall_tone: str | None = None        # e.g. "positive" / "negative" / "mixed"
-    key_events: list[str] = []             # concrete catalysts in the window (M&A, guidance, legal…)
+    # concrete catalysts in the window (M&A, guidance, legal…)
+    key_events: list[str] = []
     n_articles: int = 0                    # how many articles informed this signal
     lookback_days: int = 0                 # the news window analyzed
     top_headlines: list[str] = []          # a few representative headlines (audit trail)

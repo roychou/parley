@@ -50,7 +50,9 @@ async def test_consistency_bearish_metrics_bullish_signal(consistency_eval):
 
     result = await consistency_eval.run(analysis)
 
-    assert result.passed is False, "Eval should fail — declining revenue + thin margin contradicts BULLISH."
+    assert result.passed is False, (
+        "Eval should fail — declining revenue + thin margin contradicts BULLISH."
+    )
     assert result.details.get("verdict") == "INCONSISTENT"
     assert result.details.get("expected_signal") == "BEARISH"
     assert result.details.get("actual_signal") == "BULLISH"

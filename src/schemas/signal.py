@@ -22,7 +22,8 @@ class SpecialistSignal(BaseModel):
 DecisionDirection = Literal["BUY", "HOLD", "SELL"]
 
 
-# Real confidence requires either ensemble disagreement analysis or model-based synthesis, both out of scope for now.
+# Real confidence requires either ensemble disagreement analysis or model-based
+# synthesis, both out of scope for now.
 class Decision(BaseModel):
     """Final synthesized output of the supervisor for a single ticker."""
 

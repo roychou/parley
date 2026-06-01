@@ -80,7 +80,8 @@ async def test_tech_grounding_pattern_missing_prereqs(technicals_eval):
     analysis = build_dummy_tech_analysis(
         sma_20=145.0,
         current_price=150.0,
-        reasoning="A death cross formed as the 50-day SMA crossed below the 200-day SMA, signaling bearish momentum."
+        reasoning="A death cross formed as the 50-day SMA crossed below the "
+        "200-day SMA, signaling bearish momentum."
     )
 
     result = await technicals_eval.run(analysis)
@@ -94,7 +95,12 @@ async def test_tech_grounding_pattern_missing_prereqs(technicals_eval):
     for claim in claims:
         if claim["verdict"] == "UNGROUNDED":
             text_blob = (claim["claim_text"] + " " + claim.get("explanation", "")).lower()
-            if "death cross" in text_blob or ("50" in text_blob and "200" in text_blob) or "sma-50" in text_blob or "sma-200" in text_blob:
+            if (
+                "death cross" in text_blob
+                or ("50" in text_blob and "200" in text_blob)
+                or "sma-50" in text_blob
+                or "sma-200" in text_blob
+            ):
                 caught = True
                 break
 
@@ -112,12 +118,15 @@ async def test_tech_grounding_directional_without_history(technicals_eval):
         rsi_14=55.0,
         current_price=150.0,
         sma_20=148.0,
-        reasoning="Momentum has been steadily building over the past three weeks, with the trend reversing from bearish to bullish."
+        reasoning="Momentum has been steadily building over the past three "
+        "weeks, with the trend reversing from bearish to bullish."
     )
 
     result = await technicals_eval.run(analysis)
 
-    assert result.passed is False, "Eval should have failed due to lack of temporal data for the trend claim."
+    assert result.passed is False, (
+        "Eval should have failed due to lack of temporal data for the trend claim."
+    )
 
     claims = result.details.get("claims", [])
     assert len(claims) > 0, "Judge failed to extract any claims."

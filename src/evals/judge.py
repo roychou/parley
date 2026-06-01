@@ -1,9 +1,13 @@
 """
-src/evals/judge.py holds the LLM-as-judge helper because grounding won't be the only eval that uses one. Consistency will too.
-Probably one function: async def judge(system_prompt: str, user_prompt: str, response_schema: type[BaseModel]) -> BaseModel.
-It wraps an Anthropic SDK call, uses structured outputs (tool use or response prefill), returns a typed Pydantic object.
+src/evals/judge.py holds the LLM-as-judge helper because grounding won't be the only eval
+that uses one. Consistency will too.
+Probably one function: async def judge(system_prompt: str, user_prompt: str,
+response_schema: type[BaseModel]) -> BaseModel.
+It wraps an Anthropic SDK call, uses structured outputs (tool use or response prefill),
+returns a typed Pydantic object.
 The eval itself constructs the prompts and schema; judge.py is just the API wrapper.
-This keeps the judge call site clean and makes it trivial to swap Sonnet for Haiku later if cost forces it.
+This keeps the judge call site clean and makes it trivial to swap Sonnet for Haiku later if
+cost forces it.
 """
 import logging
 from typing import TypeVar
@@ -55,7 +59,10 @@ async def judge[T: BaseModel](
         tool_choice={"type": "tool", "name": tool_name}
     )
 
-    logger.info(f"api_usage call_site=judge input_tokens={response.usage.input_tokens} output_tokens={response.usage.output_tokens} model={model}")
+    logger.info(
+        f"api_usage call_site=judge input_tokens={response.usage.input_tokens} "
+        f"output_tokens={response.usage.output_tokens} model={model}"
+    )
 
     # 3. Extract the tool use block
     for block in response.content:

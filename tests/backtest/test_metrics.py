@@ -37,7 +37,9 @@ def test_total_return_empty_curve_returns_zero():
 
 
 def test_total_return_single_point():
-    curve = [EquitySnapshot(date="2026-01-09", cash=100_000, positions_value=0, total_value=100_000)]
+    curve = [
+        EquitySnapshot(date="2026-01-09", cash=100_000, positions_value=0, total_value=100_000)
+    ]
     # Single point → start == end → 0
     assert total_return(curve) == 0.0
 
@@ -68,7 +70,9 @@ def test_annualized_return_half_year_doubles():
 
 def test_annualized_return_insufficient_data():
     assert annualized_return([]) == 0.0
-    single = [EquitySnapshot(date="2026-01-09", cash=100_000, positions_value=0, total_value=100_000)]
+    single = [
+        EquitySnapshot(date="2026-01-09", cash=100_000, positions_value=0, total_value=100_000)
+    ]
     assert annualized_return(single) == 0.0
 
 
@@ -78,7 +82,8 @@ def test_annualized_return_insufficient_data():
 
 
 def test_sharpe_constant_returns_returns_zero():
-    # Doubling values produce bit-exact identical returns (+100% each step) → zero volatility → Sharpe = 0
+    # Doubling values produce bit-exact identical returns (+100% each step)
+    # → zero volatility → Sharpe = 0
     values = [100_000, 200_000, 400_000, 800_000]
     curve = [
         EquitySnapshot(date=f"2026-01-{i:02d}", cash=v, positions_value=0, total_value=v)
@@ -101,12 +106,15 @@ def test_sharpe_positive_excess_with_volatility():
 
 def test_sharpe_insufficient_data():
     assert sharpe_ratio([]) == 0.0
-    single = [EquitySnapshot(date="2026-01-09", cash=100_000, positions_value=0, total_value=100_000)]
+    single = [
+        EquitySnapshot(date="2026-01-09", cash=100_000, positions_value=0, total_value=100_000)
+    ]
     assert sharpe_ratio(single) == 0.0
 
 
 def test_sharpe_risk_free_rate_lowers_result():
-    # Same volatile curve evaluated at two risk-free rates. Higher rf → lower Sharpe (excess shrinks).
+    # Same volatile curve evaluated at two risk-free rates.
+    # Higher rf → lower Sharpe (excess shrinks).
     values = [100_000, 102_000, 101_000, 104_000, 103_000, 106_000]
     curve = [
         EquitySnapshot(date=f"2026-01-{i:02d}", cash=v, positions_value=0, total_value=v)

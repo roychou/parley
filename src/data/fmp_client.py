@@ -88,7 +88,10 @@ def get_bulk_csv(path: str, params: dict[str, Any] | None = None) -> str:
 
 
 def get_income_statement(ticker: str, limit: int = 5) -> list[dict[str, Any]]:
-    """Annual income statement, most recent first. Each entry includes acceptedDate (filing date)."""
+    """Annual income statement, most recent first.
+
+    Each entry includes acceptedDate (filing date).
+    """
     data = _get("income-statement", params={"symbol": ticker, "limit": limit})
     if not isinstance(data, list) or not data:
         raise FMPError(f"No income statement data returned for {ticker}")
@@ -103,7 +106,9 @@ def get_balance_sheet(ticker: str, limit: int = 5) -> list[dict[str, Any]]:
     return data
 
 
-def get_historical_prices(ticker: str, from_date: str | None = None, to_date: str | None = None) -> list[dict[str, Any]]:
+def get_historical_prices(
+    ticker: str, from_date: str | None = None, to_date: str | None = None
+) -> list[dict[str, Any]]:
     """Daily OHLCV history. Returns list ordered from most recent to oldest.
 
     Each entry: {symbol, date, open, high, low, close, volume, change, changePercent, vwap}.

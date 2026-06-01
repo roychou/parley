@@ -400,7 +400,8 @@ class RSIStrategy:
             rsi = compute_rsi(closes, window=self.window)
             if rsi is None:
                 continue
-            if rsi < self.oversold and ticker not in portfolio.positions and portfolio.can_open(ticker):
+            if (rsi < self.oversold and ticker not in portfolio.positions
+                    and portfolio.can_open(ticker)):
                 actions.append(Action(
                     kind="OPEN",
                     ticker=ticker,
@@ -440,7 +441,8 @@ class PERankingStrategy:
         ranked: list[tuple[float, str]] = []
         for ticker in universe:
             fund = fundamentals_by_ticker.get(ticker)
-            if fund is None or fund.pe_ratio is None or math.isnan(fund.pe_ratio) or fund.pe_ratio <= 0:
+            if (fund is None or fund.pe_ratio is None
+                    or math.isnan(fund.pe_ratio) or fund.pe_ratio <= 0):
                 continue
             ranked.append((fund.pe_ratio, ticker))
         ranked.sort()

@@ -97,7 +97,8 @@ class ConsistencyEval:
                 "explanation": (
                     f"Threshold rules imply {expected}; specialist returned {analysis.signal}."
                     if contradiction else
-                    f"Signal '{analysis.signal}' is consistent with threshold rules implying {expected}."
+                    f"Signal '{analysis.signal}' is consistent with threshold "
+                    f"rules implying {expected}."
                 ),
                 "metrics": _metrics_dict(analysis),
             },

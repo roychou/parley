@@ -25,7 +25,8 @@ class StrategyMetrics:
     sharpe_ratio: float                    # risk-adjusted return, weekly-annualized
     max_drawdown: float                    # worst peak-to-trough, negative number
     hit_rate: float                        # fraction of closed trades with positive P&L
-    excess_return_vs_spy: float | None     # total_return minus SPY total_return; None if SPY curve not provided
+    # total_return minus SPY total_return; None if SPY curve not provided
+    excess_return_vs_spy: float | None
     num_trades: int                        # count of closed trades
 
 

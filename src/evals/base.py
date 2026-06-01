@@ -1,9 +1,15 @@
 """
 src/evals/base.py holds the contract. Three things:
 
-EvalResult — a Pydantic model. passed: bool, score: float | None, details: dict[str, Any], plus metadata like eval_name: str and ticker: str | None. The details dict is the escape hatch for eval-specific structured output (the judge's explanation, which claims failed, etc.).
-Eval — a Protocol or ABC with an async run(input) -> EvalResult method. Use Protocol; it's lighter and fits how you've structured specialists.
-EvalRunner — a simple class or function that takes a list of Eval instances and a list of inputs, runs them (probably with asyncio.gather), and returns a list of EvalResult. Can be 20 lines. Don't overbuild.
+EvalResult — a Pydantic model. passed: bool, score: float | None, details: dict[str, Any],
+plus metadata like eval_name: str and ticker: str | None. The details dict is the escape
+hatch for eval-specific structured output (the judge's explanation, which claims failed,
+etc.).
+Eval — a Protocol or ABC with an async run(input) -> EvalResult method. Use Protocol; it's
+lighter and fits how you've structured specialists.
+EvalRunner — a simple class or function that takes a list of Eval instances and a list of
+inputs, runs them (probably with asyncio.gather), and returns a list of EvalResult. Can be
+20 lines. Don't overbuild.
 
 """
 import asyncio

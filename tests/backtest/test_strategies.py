@@ -308,7 +308,10 @@ async def test_spyhold_no_action_when_spy_already_held():
 
 def _price_history(dates_and_closes: list[tuple[str, float]]) -> dict[str, dict]:
     """Build a price history dict for one ticker from a list of (date, close)."""
-    return {date: {"open": c, "high": c, "low": c, "close": c, "volume": 1000} for date, c in dates_and_closes}
+    return {
+        date: {"open": c, "high": c, "low": c, "close": c, "volume": 1000}
+        for date, c in dates_and_closes
+    }
 
 
 @pytest.mark.asyncio
