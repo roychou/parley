@@ -42,12 +42,14 @@ certainly do not deploy capital) until it is met.
 - ~~No total return~~ — **resolved (0.2)**: dividends credited on ex-date.
 - ~~No out-of-sample / walk-forward discipline~~ — **partly resolved (0.3/0.4)**:
   tuning-axis OOS split + run log. (Does NOT cover the contamination axis — see 0.0.)
-- **Risk management = one stop-loss.** No sizing model, no exposure/concentration
-  limits, no drawdown governor.
-- **No execution path** — no broker, no paper trading, no reconciliation.
-- **No live-data pipeline, monitoring, or kill switch.**
-- **No LLM-production guardrails** — model not pinned, no injection hardening,
-  confidence can drive unbounded sizing.
+- ~~Risk management = one stop-loss~~ — **resolved (Phase 1)**: `src/risk.py` —
+  inverse-vol sizing, hard per-name cap, max-gross, drawdown governor/kill switch.
+  (Sector limits + long/short still open.)
+- **Execution path: partial** — forward paper harness + IBKR price/news adapters
+  built (mock-tested); IBKR execution adapter + live validation + monitoring remain.
+- ~~No LLM-production guardrails~~ — **mostly resolved (Phase 3)**: model pinning
+  (3.1), bounded sizing via the risk cap (3.2), prompt-injection hardening (3.3),
+  spend cap. Live-data monitoring/kill-switch (ops) remain.
 - **Synthesis is a naive confidence-weighted vote**, not risk-aware.
 
 ---
@@ -224,18 +226,23 @@ ablation running from day one).
 *Goal: a layer between synthesis and execution that owns capital preservation.
 It constrains; it does not vote.*
 
-1.1 **Risk-based position sizing** — volatility-targeting or fractional-Kelly,
-sized by risk contribution, not raw confidence. Hard per-position cap regardless
-of model confidence.
+1.1 **Risk-based position sizing** — ✅ **DONE (1 Jun 2026).** `src/risk.py`:
+inverse-vol sizing (per-position vol target / σ), confidence only as a tilt, hard
+per-name cap. Integrated into backtest + forward sizing, opt-in via `--risk`.
+*Kelly is deliberately NOT used* — it needs an edge estimate we don't have and is
+fragile; fractional-Kelly is a post-forward-calibration option.
 
-1.2 **Portfolio constraints** — max gross/net exposure, per-name cap, sector and
-factor (beta) concentration limits, basic correlation awareness.
+1.2 **Portfolio constraints** — ✅ **partial.** Max-gross (pro-rata scale-down, no
+leverage) + per-name cap done. Sector/factor concentration limits **deferred** (needs
+a sector map we don't have).
 
-1.3 **Drawdown governor / kill switch** — automatic de-risking past a threshold;
-a manual master kill switch.
+1.3 **Drawdown governor / kill switch** — ✅ **DONE.** `drawdown_derisk_multiplier`
+tapers new risk from a soft threshold (−10%) to zero at the hard kill (−20%).
 
-1.4 **Long-only vs. long/short decision** — determines whether we harvest beta or
-target alpha / market-neutrality. Drives universe and sizing. *Open decision.*
+1.4 **Long-only vs. long/short decision** — *Open.* Long-only stands (the system
+trades long BUY/SELL); long/short is a clean extension when decided.
+
+> Note: GATE 1 needs a (credit-gated) run; the risk layer is built + tested offline.
 
 > **GATE 1:** Backtest *with* the risk layer still clears GATE 0, and worst-case
 > drawdown / exposure are within a pre-stated personal risk budget.
@@ -265,14 +272,16 @@ the kill switch wired to a human.
 
 *Cross-cuts all phases; must be solid before live capital.*
 
-3.1 **Pin model IDs; treat a model upgrade as a code deploy** — re-run the full
-validation suite on any model change. Model drift silently invalidates a
-validated strategy. (Backtests are tied to a specific model.)
-3.2 **Bounded sizing regardless of confidence** — the risk layer, not the LLM,
-sets size; hard caps enforced downstream.
-3.3 **Prompt-injection hardening** — filings (and later news) are
-attacker-influenceable text. Sanitize, bound, and never let model output size a
-trade without passing through the risk layer.
+3.1 **Pin model IDs; treat a model upgrade as a code deploy** — ✅ **DONE (1 Jun 2026).**
+`src/models.py` is the single registry (IDs, training cutoffs, prices); budget/temporal/
+specialists read from it, so a model change is one deliberate edit = the re-validation
+chokepoint. Each run records the pinned IDs (runlog).
+3.2 **Bounded sizing regardless of confidence** — ✅ **DONE.** The risk layer's hard
+per-name cap bounds size regardless of model confidence.
+3.3 **Prompt-injection hardening** — ✅ **DONE (1 Jun 2026).** `src/agents/safety.py`:
+untrusted filing/news text is delimited + the model is instructed to treat it as data,
+never instructions (spoofed delimiters stripped). Defense-in-depth with forced tool
+output + the risk cap → a successful injection is at worst one bounded skewed vote.
 3.4 **Cost & latency budgets**, output-schema validation (largely in place via
 forced tool use), determinism/repro, and the existing decision audit retained as
 the post-mortem trail.
