@@ -284,6 +284,10 @@ def _fmt_pct(x: float | None) -> str:
 def print_summary(result: BacktestResult) -> None:
     spy = result.outcomes.get("spy_hold")
     spy_curve = spy.portfolio.equity_curve if spy else None
+    # The SPY benchmark is only usable if it actually moved (it needs SPY prices,
+    # which the offline sp500 path may not have cached). A flat benchmark makes
+    # vs-SPY and alpha/beta meaningless — report that honestly instead of 0.00s.
+    benchmark_usable = bool(spy_curve) and len({s.total_value for s in spy_curve}) > 1
 
     print("\n" + "=" * 72)
     print("BACKTEST VALIDATION SUMMARY")
@@ -300,7 +304,7 @@ def print_summary(result: BacktestResult) -> None:
         m: StrategyMetrics = compute_metrics(
             outcome.portfolio.equity_curve,
             outcome.portfolio.closed_trades,
-            spy_equity_curve=None if name == "spy_hold" else spy_curve,
+            spy_equity_curve=(spy_curve if benchmark_usable and name != "spy_hold" else None),
             periods_per_year=result.config.periods_per_year,
         )
         print(
@@ -310,8 +314,12 @@ def print_summary(result: BacktestResult) -> None:
         )
 
     # Alpha vs. beta: is the return skill or just market exposure? (Skips SPY itself,
-    # which is beta=1/alpha=0 by definition.)
-    if spy_curve:
+    # which is beta=1/alpha=0 by definition.) Needs a usable (non-flat) benchmark.
+    if not benchmark_usable:
+        print("-" * 72)
+        print("vs-SPY / alpha-beta: SPY benchmark unavailable (no SPY price data "
+              "cached for this run) — those columns are n/a, not zero.")
+    if benchmark_usable:
         print("-" * 72)
         print(f"{'alpha/beta vs SPY':<14}{'beta':>9}{'alpha(ann)':>12}{'R^2':>8}{'periods':>9}")
         for name, outcome in result.outcomes.items():
