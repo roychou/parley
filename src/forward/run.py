@@ -35,8 +35,8 @@ from src.backtest.budget import BudgetedMessages, BudgetMeter
 from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
 from src.data.dividends import load_dividends
-from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
+from src.data.filings import recent_filing_dates
 from src.data.fmp_client import get_stock_news
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of

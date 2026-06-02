@@ -52,8 +52,8 @@ from src.backtest.strategies import (
 from src.backtest.temporal import DEFAULT_MODEL_CUTOFF, report_and_filter
 from src.backtest.validation import choose_split_date, print_walk_forward
 from src.data.dividends import load_dividends
-from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
+from src.data.filings import recent_filing_dates
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.sectors import sector_of
 from src.data.technicals import get_technicals_as_of
