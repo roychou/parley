@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Weekly forward paper-trading run (macOS LaunchAgent).
+  Install: copy to ~/Library/LaunchAgents/ and load it — see notes/scheduler.md.
+  Edit Weekday/Hour/Minute to change the schedule, and PARLEY_* to change source/cap.
+  Runs only while you are logged in (laptop-first); if the Mac is asleep at the
+  scheduled time, launchd runs it once on the next wake.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.parley.forward-weekly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/roychou/Development/parley/scripts/forward_weekly.sh</string>
+    </array>
+
+    <!-- Sunday 17:00 local: decide on the week's closed data. Weekday 0 = Sunday. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>17</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PARLEY_SOURCE</key>
+        <string>ibkr</string>
+        <key>PARLEY_MAX_LLM_USD</key>
+        <string>8</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/roychou/Development/parley/data/forward/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/roychou/Development/parley/data/forward/logs/launchd.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

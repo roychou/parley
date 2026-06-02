@@ -245,6 +245,8 @@ def main() -> None:
                         help="Decision date (default today).")
     parser.add_argument("--source", choices=["ibkr", "fmp"], default="ibkr",
                         help="Price/news source: ibkr (Gateway/TWS) or fmp (no broker).")
+    parser.add_argument("--book", default=None,
+                        help="PaperBook path (default data/forward/paper_book.json).")
     parser.add_argument("--no-news", action="store_true", help="Disable the news specialist.")
     parser.add_argument("--no-risk", action="store_true",
                         help="Use flat sizing instead of the risk layer.")
@@ -265,6 +267,7 @@ def main() -> None:
         price_source=args.source,
         include_news=not args.no_news, use_risk=not args.no_risk, use_batch=not args.no_batch,
         max_llm_usd=args.max_llm_usd, refresh=not args.no_refresh,
+        book_path=Path(args.book) if args.book else DEFAULT_BOOK_PATH,
     ))
     print(summary)
 
