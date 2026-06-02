@@ -114,9 +114,10 @@ def run_forward_step(
     portfolio.mark_to_market(prices, date, stop_loss_pct=stop_loss_pct)
 
     if decisions:
+        from src.data.sectors import sector_of
         translator = MultiAgentStrategy(
             decision_provider=None, base_pct=base_pct, floor=floor, cap=cap,
-            risk_config=risk_config,
+            risk_config=risk_config, sector_map_fn=sector_of,
         )
         actions = translator.build_actions(decisions, portfolio, vols=vols)
         sizing_value = portfolio.total_value(prices)  # snapshot before any action

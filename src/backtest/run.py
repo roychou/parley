@@ -55,6 +55,7 @@ from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
+from src.data.sectors import sector_of
 from src.data.technicals import get_technicals_as_of
 from src.data.universe import membership_end, nasdaq100_as_of
 from src.risk import RiskConfig
@@ -155,6 +156,7 @@ def build_strategies(
             filing_dates_fn=filing_dates_fn,
             screen_lookback_days=screen_lookback_days,
             risk_config=risk_config,
+            sector_map_fn=sector_of,
         ),
         SPYHoldStrategy(),
         RandomStrategy(seed=42),

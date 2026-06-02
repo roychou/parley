@@ -97,3 +97,23 @@ def test_size_positions_derisk_multiplier_shrinks_all():
     full = size_positions({"AAA": 1.0}, {"AAA": 0.30}, cfg, derisk_multiplier=1.0)
     half = size_positions({"AAA": 1.0}, {"AAA": 0.30}, cfg, derisk_multiplier=0.5)
     assert half["AAA"] == pytest.approx(full["AAA"] * 0.5)
+
+
+def test_size_positions_caps_sector_concentration():
+    """The per-sector cap scales an over-weight sector down to max_sector_pct, so the
+    per-name cap can't aggregate into a concentrated single-sector book. Names with no
+    sector are exempt; the cap only ever reduces (never adds) exposure."""
+    from src.risk import RiskConfig, size_positions
+    cfg = RiskConfig()  # max_sector_pct 0.40, per-name cap 0.15
+    cand = {t: 1.0 for t in ["AAA", "BBB", "CCC", "DDD", "EEE"]}
+    vols = {t: 0.20 for t in cand}  # equal vol -> equal raw weights (each at the cap)
+    sectors = {"AAA": "Tech", "BBB": "Tech", "CCC": "Tech", "DDD": "Tech", "EEE": "Energy"}
+    tech = ["AAA", "BBB", "CCC", "DDD"]
+
+    no_cap = size_positions(cand, vols, cfg)                    # sectors=None -> no cap
+    capped = size_positions(cand, vols, cfg, sectors=sectors)
+
+    assert sum(no_cap[t] for t in tech) > 0.40                 # precondition: over-concentrated
+    assert abs(sum(capped[t] for t in tech) - 0.40) < 1e-9     # pulled to the sector ceiling
+    assert abs(capped["AAA"] - capped["BBB"]) < 1e-12          # scaled pro-rata (equal)
+    assert capped["EEE"] == no_cap["EEE"]                      # other sector untouched

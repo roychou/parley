@@ -159,6 +159,7 @@ class MultiAgentStrategy:
         filing_dates_fn: FilingDatesFn | None = None,
         screen_lookback_days: int = 100,
         risk_config: RiskConfig | None = None,
+        sector_map_fn: Callable[[str], str | None] | None = None,
     ):
         self.decision_provider = decision_provider
         self.base_pct = base_pct
@@ -172,6 +173,8 @@ class MultiAgentStrategy:
         # the whole universe given (backward compatible).
         self.filing_dates_fn = filing_dates_fn
         self.screen_lookback_days = screen_lookback_days
+        # ticker -> sector lookup for the risk layer's per-sector cap (None = off)
+        self.sector_map_fn = sector_map_fn
         self._last_decision_date: str | None = None
         self.last_decisions: list[Decision] = []
 
@@ -263,7 +266,10 @@ class MultiAgentStrategy:
         confidences = {t: d.confidence for t, d in buys.items()}
         equity = [s.total_value for s in portfolio.equity_curve]
         derisk = drawdown_derisk_multiplier(equity, self.risk_config)
-        weights = size_positions(confidences, vols or {}, self.risk_config, derisk)
+        sectors = ({t: self.sector_map_fn(t) for t in confidences}
+                   if self.sector_map_fn else None)
+        weights = size_positions(confidences, vols or {}, self.risk_config, derisk,
+                                 sectors=sectors)
         for ticker, weight in weights.items():
             actions.append(Action(kind="OPEN", ticker=ticker,
                                   position_size_pct=weight, decision=buys[ticker]))

@@ -33,6 +33,7 @@ class RiskConfig:
     max_position_pct: float = 0.15          # hard per-name cap (fraction of equity)
     min_position_pct: float = 0.02          # below this, don't bother opening
     max_gross_exposure: float = 1.00        # sum of weights cap (1.0 = no leverage)
+    max_sector_pct: float = 0.40            # max aggregate weight in any one sector
     use_confidence_tilt: bool = True        # scale weight by decision confidence
     vol_floor: float = 0.05                 # σ floor; stops low-vol names blowing up weight
     vol_lookback: int = 60                  # trading days of returns for the vol estimate
@@ -94,15 +95,31 @@ def size_positions(
     vols: dict[str, float | None],           # ticker -> annualized vol (or None)
     cfg: RiskConfig,
     derisk_multiplier: float = 1.0,
+    sectors: dict[str, str] | None = None,
 ) -> dict[str, float]:
     """Portfolio-level sizing: risk-based per-name weights, the drawdown governor, the
-    per-name floor, and the max-gross cap (pro-rata scale-down). Returns {ticker:
-    weight} for names worth opening (>= min_position_pct after all constraints)."""
+    per-name floor, the per-sector concentration cap, and the max-gross cap (pro-rata
+    scale-down). Returns {ticker: weight} for names worth opening. `sectors` maps
+    ticker -> sector; names with no known sector are exempt from the sector cap."""
     raw = {}
     for ticker, conf in candidates.items():
         w = target_weight(vols.get(ticker), conf, cfg) * derisk_multiplier
         if w >= cfg.min_position_pct:
             raw[ticker] = w
+    # Sector concentration cap: scale down any sector whose aggregate weight exceeds
+    # cfg.max_sector_pct, so the per-name cap can't add up to (e.g.) a 60%-semis book.
+    if sectors:
+        by_sector: dict[str, list[str]] = {}
+        for t in raw:
+            sec = sectors.get(t)
+            if sec:
+                by_sector.setdefault(sec, []).append(t)
+        for names in by_sector.values():
+            sec_sum = sum(raw[t] for t in names)
+            if sec_sum > cfg.max_sector_pct and sec_sum > 0:
+                scale = cfg.max_sector_pct / sec_sum
+                for t in names:
+                    raw[t] *= scale
     gross = sum(raw.values())
     if gross > cfg.max_gross_exposure and gross > 0:
         scale = cfg.max_gross_exposure / gross
