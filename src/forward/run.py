@@ -2,19 +2,19 @@
 Forward paper-trading entrypoint — one weekly session, end to end.
 
 Ties the whole forward stack into a single command:
-  connect IBKR -> refresh the price cache + news store from one connection ->
-  build the decision provider (fundamentals + technicals + sentiment + news, reading
-  the IBKR-refreshed caches) -> run_forward_session (screen -> decide -> size via the
-  risk layer -> execute against the persistent PaperBook) -> save.
+  refresh prices (+news) -> build the decision provider (fundamentals + technicals +
+  sentiment + news) -> run_forward_session (screen -> decide -> size via the risk
+  layer -> execute against the persistent PaperBook) -> save.
 
-A scheduler (cron/launchd) runs this weekly. Laptop-first: Gateway runs locally during
-the ~minutes-long session, then idles. The pure cache-derived helpers
-(current_price_from_cache, volatility_from_cache, dividends_since) are unit-tested; the
-IBKR connect/refresh and the full orchestration must be **validated live against a
-running Gateway** (CI has none) — same honest limit as the adapters.
+Two price/news sources (--source):
+- "fmp": daily bars from FMP, no broker. The paper book is simulated, so IBKR is NOT
+  needed to run the forward clock — only later for real order execution. (News-off for
+  now; an FMP news adapter is the follow-up. This is the runnable path today.)
+- "ibkr": prices + Benzinga news from a running IB Gateway/TWS. Needs the Gateway up +
+  a market-data subscription; the connect/refresh must be validated live (CI has none).
 
-Prereqs to run: IB Gateway (paper) + US market-data subscription + Benzinga news +
-Anthropic credits. Until then this is staged and ready, not runnable.
+A scheduler (cron/launchd) runs this weekly. The cache-derived helpers
+(current_price_from_cache, volatility_from_cache, dividends_since) are unit-tested.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
 from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
-from src.data.fetch_prices import load_latest_cache
+from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of
 from src.data.universe import nasdaq100_as_of
@@ -100,8 +100,22 @@ def _prev_day(d: str) -> str:
     return (date(y, m, day) - timedelta(days=1)).isoformat()
 
 
+def refresh_prices_fmp(tickers: list[str], period: str = "5y") -> None:
+    """Forward price refresh with no broker: fetch + cache daily bars from FMP — the
+    same source the backtest uses. Lets the weekly clock run without IB Gateway/TWS;
+    IBKR is only needed later for real order execution (the paper book is simulated)."""
+    ok = 0
+    for t in tickers:
+        try:
+            get_prices(t, period)  # fetches from FMP and writes the period cache
+            ok += 1
+        except Exception as e:  # one bad symbol must not abort the weekly run
+            logger.warning(f"FMP price refresh failed for {t}: {e}")
+    logger.info(f"FMP price refresh: {ok}/{len(tickers)} tickers cached (period={period})")
+
+
 # ==========================================
-# ONE FORWARD SESSION (live; validate against Gateway)
+# ONE FORWARD SESSION
 # ==========================================
 
 
@@ -109,6 +123,7 @@ async def run_forward_paper_session(
     tickers: list[str],
     as_of: str,
     *,
+    price_source: str = "ibkr",
     include_news: bool = True,
     use_batch: bool = True,
     use_risk: bool = True,
@@ -117,17 +132,30 @@ async def run_forward_paper_session(
     cost_model: CostModel | None = None,
     book_path: Path = DEFAULT_BOOK_PATH,
 ) -> dict:
-    """Run one weekly forward paper session and persist the book. `refresh=False` skips
-    the IBKR pull (use a warm cache / for testing)."""
+    """Run one weekly forward paper session and persist the book.
+
+    price_source: "ibkr" pulls prices + news from a running IB Gateway/TWS; "fmp"
+    pulls daily bars from FMP with no broker (the book is simulated, so IBKR is only
+    needed later for real order execution). `refresh=False` skips the pull (warm cache).
+    """
+    period = FORWARD_PRICE_PERIOD if price_source == "ibkr" else "5y"
     news_store: dict[str, list[dict]] = {}
+
+    if price_source == "fmp" and include_news:
+        logger.warning("FMP news adapter not built yet — running news-off for this session.")
+        include_news = False
+
     if refresh:
-        ib = await connect()
-        try:
-            await refresh_price_cache(ib, tickers, period=FORWARD_PRICE_PERIOD)
-            if include_news:
-                news_store = await fetch_news_for(ib, tickers, as_of)
-        finally:
-            ib.disconnect()
+        if price_source == "ibkr":
+            ib = await connect()
+            try:
+                await refresh_price_cache(ib, tickers, period=period)
+                if include_news:
+                    news_store = await fetch_news_for(ib, tickers, as_of)
+            finally:
+                ib.disconnect()
+        else:
+            refresh_prices_fmp(tickers, period)
 
     client = AsyncAnthropic()
     base_mc = BatchLLM(client) if use_batch else client.messages
@@ -138,8 +166,8 @@ async def run_forward_paper_session(
 
     provider = partial(
         run_forward_decision, mc,
-        fundamentals_loader=partial(get_fundamentals_as_of, price_period=FORWARD_PRICE_PERIOD),
-        technicals_loader=partial(get_technicals_as_of, price_period=FORWARD_PRICE_PERIOD),
+        fundamentals_loader=partial(get_fundamentals_as_of, price_period=period),
+        technicals_loader=partial(get_technicals_as_of, price_period=period),
         news_source=news_source_from_store(news_store),
         include_news=include_news,
         signal_cache=SignalCache(SIGNAL_CACHE_DIR),
@@ -152,8 +180,8 @@ async def run_forward_paper_session(
     summary = await run_forward_session(
         book, as_of, tickers,
         decision_provider=provider,
-        current_price=current_price_from_cache(FORWARD_PRICE_PERIOD),
-        volatility=(volatility_from_cache(FORWARD_PRICE_PERIOD, as_of, RiskConfig().vol_lookback)
+        current_price=current_price_from_cache(period),
+        volatility=(volatility_from_cache(period, as_of, RiskConfig().vol_lookback)
                     if use_risk else None),
         filing_dates_fn=recent_filing_dates,
         cost_model=cost_model or CostModel.ibkr_singapore_fixed(),
@@ -170,6 +198,8 @@ def main() -> None:
                         help="Universe (default: current Nasdaq-100).")
     parser.add_argument("--as-of", default=date.today().isoformat(),
                         help="Decision date (default today).")
+    parser.add_argument("--source", choices=["ibkr", "fmp"], default="ibkr",
+                        help="Price/news source: ibkr (Gateway/TWS) or fmp (no broker).")
     parser.add_argument("--no-news", action="store_true", help="Disable the news specialist.")
     parser.add_argument("--no-risk", action="store_true",
                         help="Use flat sizing instead of the risk layer.")
@@ -182,10 +212,12 @@ def main() -> None:
     args = parser.parse_args()
 
     tickers = args.tickers or nasdaq100_as_of(args.as_of)
-    logger.info(f"forward session as_of={args.as_of} | {len(tickers)} tickers | "
-                f"news={not args.no_news} risk={not args.no_risk} batch={not args.no_batch}")
+    logger.info(f"forward session as_of={args.as_of} | source={args.source} | {len(tickers)} "
+                f"tickers | news={not args.no_news} risk={not args.no_risk} "
+                f"batch={not args.no_batch}")
     summary = asyncio.run(run_forward_paper_session(
         tickers, args.as_of,
+        price_source=args.source,
         include_news=not args.no_news, use_risk=not args.no_risk, use_batch=not args.no_batch,
         max_llm_usd=args.max_llm_usd, refresh=not args.no_refresh,
     ))
