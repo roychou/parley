@@ -14,8 +14,9 @@ Two modes:
 - Watchlist (default): the static --tickers, multi-agent analyzes them all.
     uv run python -m src.backtest.run
 - Nasdaq-100 (the full funnel): point-in-time index membership -> event-driven
-  candidate screen (fresh quarterly filers + holdings) -> analysis. Seed caches
-  with `python -m src.backtest.backfill` first; expect real LLM cost.
+  candidate screen (fresh quarterly filers + holdings) -> analysis. Expect real LLM
+  cost. (Backtest is retained for plumbing/validation; forward paper trading is the
+  real evaluation — see notes/productization.md.)
     uv run python -m src.backtest.run --nasdaq100 --dates ...
 
 Specialist signals are cached on disk (signal cache), so re-runs are cheap until
