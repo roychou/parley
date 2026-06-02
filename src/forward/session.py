@@ -48,6 +48,7 @@ async def run_forward_session(
     stop_loss_pct: float | None = -0.20,
     risk_config: RiskConfig | None = None,
     volatility: Volatility | None = None,
+    candidates: list[str] | None = None,
 ) -> dict:
     """Run one forward paper-trading session and persist the book.
 
@@ -57,13 +58,14 @@ async def run_forward_session(
     small summary dict for logging/audit.
     """
     held = list(book.positions)
-    if filing_dates_fn is not None:
-        candidates = select_candidates(
-            eligible_universe, held, _window_start(as_of, screen_lookback_days), as_of,
-            filing_dates_fn,
-        )
-    else:
-        candidates = sorted(set(eligible_universe) | set(held))
+    if candidates is None:  # caller may pre-screen (to refresh only these names)
+        if filing_dates_fn is not None:
+            candidates = select_candidates(
+                eligible_universe, held, _window_start(as_of, screen_lookback_days), as_of,
+                filing_dates_fn,
+            )
+        else:
+            candidates = sorted(set(eligible_universe) | set(held))
 
     decisions: list[Decision] = []
     skipped: list[str] = []  # candidates the provider couldn't decide (missing data)

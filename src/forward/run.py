@@ -34,6 +34,7 @@ from src.backtest.batch import BatchLLM
 from src.backtest.budget import BudgetedMessages, BudgetMeter
 from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
+from src.backtest.screen import select_candidates
 from src.data.dividends import load_dividends
 from src.data.fetch_prices import get_prices, load_latest_cache
 from src.data.filings import recent_filing_dates
@@ -58,6 +59,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+SCREEN_LOOKBACK_DAYS = 7  # trailing window for the filing-event screen
 SIGNAL_CACHE_DIR = Path("data/cache/signals")
 SUMMARY_CACHE_DIR = Path("data/cache/filing_summaries")
 
@@ -165,19 +167,30 @@ async def run_forward_paper_session(
     needed later for real order execution). `refresh=False` skips the pull (warm cache).
     """
     period = FORWARD_PRICE_PERIOD if price_source == "ibkr" else "5y"
-    news_store: dict[str, list[dict]] = {}
+    book = PaperBook.load(book_path)
 
+    # Screen FIRST (filing dates, not prices), then refresh only the names we'll
+    # actually analyze — candidates + holdings, a handful — instead of the whole
+    # universe. Keeps the per-session data pull small and under IBKR's historical-
+    # request pacing limit.
+    held = list(book.positions)
+    window_start = (date.fromisoformat(as_of) - timedelta(days=SCREEN_LOOKBACK_DAYS)).isoformat()
+    candidates = select_candidates(tickers, held, window_start, as_of, recent_filing_dates)
+    logger.info(f"screen: {len(candidates)} candidates "
+                f"({len(tickers)} universe + {len(held)} held)")
+
+    news_store: dict[str, list[dict]] = {}
     if refresh:
         if price_source == "ibkr":
             ib = await connect()
             try:
-                await refresh_price_cache(ib, tickers, period=period)
+                await refresh_price_cache(ib, candidates, period=period)
                 if include_news:
-                    news_store = await fetch_news_for(ib, tickers, as_of)
+                    news_store = await fetch_news_for(ib, candidates, as_of)
             finally:
                 ib.disconnect()
         else:
-            refresh_prices_fmp(tickers, period)
+            refresh_prices_fmp(candidates, period)
 
     # News source: FMP fetches lazily per candidate; IBKR uses the pre-fetched store.
     if not include_news:
@@ -205,10 +218,10 @@ async def run_forward_paper_session(
         scaffold_config=ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None,
     )
 
-    book = PaperBook.load(book_path)
     risk_config = RiskConfig() if use_risk else None
     summary = await run_forward_session(
         book, as_of, tickers,
+        candidates=candidates,
         decision_provider=provider,
         current_price=current_price_from_cache(period),
         volatility=(volatility_from_cache(period, as_of, RiskConfig().vol_lookback)
