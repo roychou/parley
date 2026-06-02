@@ -365,18 +365,32 @@ def _total_debt_at(gaap: dict, end_date: str) -> float:
 
 
 def build_filings_history(ticker: str) -> list[dict]:
-    """Per-quarter point-in-time fundamentals for `ticker`, most recent first.
+    """Per-period point-in-time fundamentals for `ticker`, most recent first. Shape
+    `get_fundamentals_as_of` consumes: {report_date, period_end_date, diluted_eps,
+    profit_margin, rev_growth_yoy, debt_to_equity, freq}.
 
-    Same dict shape `get_fundamentals_as_of` already consumes:
-    {report_date, period_end_date, diluted_eps, profit_margin, rev_growth_yoy,
-     debt_to_equity}. Q4 (flow metrics) is derived as FY minus the three reported
-     quarters. rev_growth_yoy compares the same fiscal period one year prior.
+    Primary path: US-GAAP quarterly filers (10-Q/10-K) — Q4 derived from the FY, TTM
+    diluted EPS for P/E. Fallback: annual / IFRS / foreign-currency filers (20-F/40-F:
+    ASML, PDD, CCEP, Ferrovial, Thomson Reuters), built from annual periods.
     """
     facts = fetch_company_facts(ticker)
-    gaap = facts.get("facts", {}).get("us-gaap", {})
-    if not gaap:
-        raise EdgarError(f"No us-gaap facts for {ticker}")
+    allfacts = facts.get("facts", {})
+    gaap = allfacts.get("us-gaap", {})
+    if gaap:
+        quarterly = _build_quarterly_usgaap(gaap)
+        if quarterly:
+            return quarterly
+    annual = _build_annual_any(allfacts)
+    if annual:
+        return annual
+    if not gaap and "ifrs-full" not in allfacts:
+        raise EdgarError(f"No us-gaap or ifrs-full facts for {ticker}")
+    return []
 
+
+def _build_quarterly_usgaap(gaap: dict) -> list[dict]:
+    """US-GAAP quarterly fundamentals (the original path): Q4 = FY minus the three
+    reported quarters; TTM diluted EPS for P/E; same-quarter-prior-year YoY growth."""
     rev_rows = _best_revenue_rows(gaap)
     ni_rows = _concept_rows(gaap, ["NetIncomeLoss"])
     eps_rows = _concept_rows(gaap, ["EarningsPerShareDiluted"], unit="USD/shares")
@@ -395,8 +409,7 @@ def build_filings_history(ticker: str) -> list[dict]:
             if fye in q_map:
                 continue
             # Q1-Q3 of this fiscal year end within ~11 months before fye
-            # (≈ -90/-180/-270 days); a day-span window is robust to 52/53-week
-            # fiscal drift where an exact same-MM-DD prior-year boundary is not.
+            # (a day-span window is robust to 52/53-week fiscal drift).
             parts = [
                 q for end, q in q_map.items()
                 if (sp := _span_days(end, fye)) is not None and 45 < sp < 330
@@ -413,8 +426,6 @@ def build_filings_history(ticker: str) -> list[dict]:
     _derive_q4(ni_fy, ni_q)
     _derive_q4(eps_fy, eps_q)
 
-    # Trailing-twelve-month diluted EPS: P/E must use TTM, not a single quarter
-    # (a quarterly EPS would inflate P/E ~4x). TTM = the four quarters ending at E.
     eps_ends = sorted(eps_q)
 
     def _ttm_eps(end: str) -> float:
@@ -423,8 +434,7 @@ def build_filings_history(ticker: str) -> list[dict]:
         i = eps_ends.index(end)
         if i < 3:
             return float("nan")
-        window = eps_ends[i - 3:i + 1]
-        return sum(float(eps_q[e]["val"]) for e in window)
+        return sum(float(eps_q[e]["val"]) for e in eps_ends[i - 3:i + 1])
 
     rev_ends = list(rev_q)
     filings: list[dict] = []
@@ -433,12 +443,10 @@ def build_filings_history(ticker: str) -> list[dict]:
         ni_rec = ni_q.get(end)
         prior_end = _match_prior_year(end, rev_ends)
         prior_rev = rev_q.get(prior_end) if prior_end else None
-
         net_income = float(ni_rec["val"]) if ni_rec else float("nan")
         equity = _instant_at(eq_rows, end)
         equity = equity if equity is not None else float("nan")
         total_debt = _total_debt_at(gaap, end)
-
         filings.append({
             "report_date": rev_rec.get("filed", ""),
             "period_end_date": end,
@@ -448,7 +456,86 @@ def build_filings_history(ticker: str) -> list[dict]:
                 calc_growth_yoy(revenue, float(prior_rev["val"])) if prior_rev else float("nan")
             ),
             "debt_to_equity": calc_debt_equity(total_debt, equity),
+            "freq": "quarterly",
         })
-
     filings.sort(key=lambda f: f["report_date"], reverse=True)
     return filings
+
+
+# Concept names per taxonomy, for the annual/foreign fallback. Revenue uses the
+# us-gaap list above; ifrs-full has its own tags.
+_TAXONOMIES: dict[str, dict[str, list[str]]] = {
+    "us-gaap": {
+        "revenue": REVENUE_CONCEPTS,
+        "net_income": ["NetIncomeLoss"],
+        "eps": ["EarningsPerShareDiluted"],
+        "equity": ["StockholdersEquity"],
+    },
+    "ifrs-full": {
+        "revenue": ["Revenue", "RevenueFromContractsWithCustomers"],
+        "net_income": ["ProfitLoss"],
+        "eps": ["DilutedEarningsLossPerShare", "BasicAndDilutedEarningsLossPerShare"],
+        "equity": ["EquityAttributableToOwnersOfParent", "Equity"],
+    },
+}
+
+
+def _revenue_rows_any(node: dict, concepts: list[str]) -> tuple[list[dict], str | None]:
+    """First present revenue concept's rows + its reporting currency. Prefer USD when
+    the filer also reports it (PDD, TRI) so P/E stays valid; else the native currency
+    (EUR, etc.)."""
+    for name in concepts:
+        units = node.get(name, {}).get("units", {})
+        if not units:
+            continue
+        unit = "USD" if "USD" in units else next(iter(units), None)
+        if unit:
+            return units[unit], unit
+    return [], None
+
+
+def _build_annual_any(allfacts: dict) -> list[dict]:
+    """Annual fundamentals for filers without US-GAAP quarterly data — foreign 20-F/40-F
+    filers (us-gaap-annual or ifrs-full, often non-USD). Margin and YoY growth are
+    currency-free ratios; EPS / P-E are populated only when the filer reports in USD
+    (else NaN — never a currency-mismatched P/E). IFRS debt tags vary, so debt/equity
+    is best-effort (NaN when not found)."""
+    for taxo, spec in _TAXONOMIES.items():
+        node = allfacts.get(taxo, {})
+        if not node:
+            continue
+        rev_rows, currency = _revenue_rows_any(node, spec["revenue"])
+        rev_fy = _annual_flow(rev_rows)
+        if not rev_fy:
+            continue
+        is_usd = currency == "USD"
+        ni_fy = _annual_flow(_concept_rows(node, spec["net_income"], unit=currency))
+        eps_fy = _annual_flow(_concept_rows(node, spec["eps"], unit=f"{currency}/shares"))
+        eq_rows = _concept_rows(node, spec["equity"], unit=currency)
+        rev_ends = list(rev_fy)
+        filings: list[dict] = []
+        for end, rec in rev_fy.items():
+            revenue = float(rec["val"])
+            ni_rec = ni_fy.get(end)
+            net_income = float(ni_rec["val"]) if ni_rec else float("nan")
+            prior_end = _match_prior_year(end, rev_ends)
+            prior_rev = rev_fy.get(prior_end) if prior_end else None
+            equity = _instant_at(eq_rows, end)
+            equity = equity if equity is not None else float("nan")
+            debt = _total_debt_at(node, end) if taxo == "us-gaap" else float("nan")
+            eps = float(eps_fy[end]["val"]) if (is_usd and end in eps_fy) else float("nan")
+            filings.append({
+                "report_date": rec.get("filed", ""),
+                "period_end_date": end,
+                "diluted_eps": eps,  # annual (full-year) EPS; NaN for non-USD reporters
+                "profit_margin": calc_margin(net_income, revenue),
+                "rev_growth_yoy": (
+                    calc_growth_yoy(revenue, float(prior_rev["val"])) if prior_rev else float("nan")
+                ),
+                "debt_to_equity": calc_debt_equity(debt, equity),
+                "freq": "annual",
+            })
+        filings.sort(key=lambda f: f["report_date"], reverse=True)
+        if filings:
+            return filings
+    return []

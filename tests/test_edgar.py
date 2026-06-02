@@ -148,3 +148,44 @@ def test_best_revenue_rows_skips_annual_only_concept():
     # picked "Revenues" (the one with quarterly flow), not the annual-only first concept
     assert edgar._quarter_flow(rows)  # non-empty quarters
     assert any(r["val"] in (100, 110) for r in rows)
+
+
+def test_build_annual_any_ifrs_eur_filer(monkeypatch):
+    """Foreign IFRS filer (annual, EUR): margin & YoY from annual figures; EPS NaN
+    (non-USD, so no currency-mismatched P/E); freq 'annual'."""
+    facts = {"facts": {"ifrs-full": {
+        "Revenue": {"units": {"EUR": [
+            _dur("2024-01-01", "2024-12-31", 100, "2025-02-20"),
+            _dur("2025-01-01", "2025-12-31", 120, "2026-02-20"),
+        ]}},
+        "ProfitLoss": {"units": {"EUR": [_dur("2025-01-01", "2025-12-31", 30, "2026-02-20")]}},
+        "Equity": {"units": {"EUR": [_inst("2025-12-31", 500, "2026-02-20")]}},
+        "DilutedEarningsLossPerShare": {"units": {"EUR/shares": [
+            _dur("2025-01-01", "2025-12-31", 2.5, "2026-02-20")]}},
+    }}}
+    monkeypatch.setattr(edgar, "fetch_company_facts", lambda t: facts)
+    by = {x["period_end_date"]: x for x in edgar.build_filings_history("IFRSCO")}
+    assert by["2025-12-31"]["freq"] == "annual"
+    assert by["2025-12-31"]["rev_growth_yoy"] == 0.20      # (120-100)/100
+    assert by["2025-12-31"]["profit_margin"] == 30 / 120
+    eps = by["2025-12-31"]["diluted_eps"]
+    assert eps != eps                                      # NaN — EUR reporter
+
+
+def test_build_annual_any_usd_filer_keeps_eps(monkeypatch):
+    """Annual filer reporting in USD (no quarterly data): EPS retained so P/E is valid."""
+    facts = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            _dur("2024-01-01", "2024-12-31", 100, "2025-02-20"),
+            _dur("2025-01-01", "2025-12-31", 110, "2026-02-20"),
+        ]}},
+        "NetIncomeLoss": {"units": {"USD": [_dur("2025-01-01", "2025-12-31", 22, "2026-02-20")]}},
+        "EarningsPerShareDiluted": {"units": {"USD/shares": [
+            _dur("2025-01-01", "2025-12-31", 3.0, "2026-02-20")]}},
+        "StockholdersEquity": {"units": {"USD": [_inst("2025-12-31", 200, "2026-02-20")]}},
+    }}}
+    monkeypatch.setattr(edgar, "fetch_company_facts", lambda t: facts)
+    by = {x["period_end_date"]: x for x in edgar.build_filings_history("USDCO")}
+    assert by["2025-12-31"]["freq"] == "annual"
+    assert by["2025-12-31"]["diluted_eps"] == 3.0          # USD -> retained
+    assert abs(by["2025-12-31"]["rev_growth_yoy"] - 0.10) < 1e-9

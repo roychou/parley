@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 # years-stale fundamentals. Generous enough to tolerate a late/missed quarter; far
 # tighter than the multi-year staleness it is meant to catch.
 MAX_FILING_AGE_DAYS = 200
+# Annual filers (foreign 20-F/40-F) report ~yearly, so their latest filing is
+# legitimately older between reports; the guard catches multi-year staleness, not
+# the annual cadence.
+ANNUAL_MAX_FILING_AGE_DAYS = 430
+ANNUAL_MAX_PERIOD_AGE_DAYS = 550
 
 
 def _days_between(earlier: str, later: str) -> int | None:
@@ -110,7 +115,7 @@ FILINGS_CACHE_DIR = CACHE_DIR.parent / "filings_history"
 # filings (the cache is otherwise keyed only by ticker+date). Bump when
 # build_filings_history changes.
 # v4: revenue concept by most-recent coverage + YoY prior-period tolerance
-FILINGS_CACHE_VERSION = "edgar-v4"
+FILINGS_CACHE_VERSION = "edgar-v5"
 
 
 def _filings_cache_path(ticker: str) -> Path:
@@ -158,17 +163,14 @@ def get_filings_history(ticker: str) -> list[dict]:
 def get_fundamentals_as_of(
     ticker: str, as_of_date: str, price_period: str = "5y"
 ) -> ValuationSnapshot | None:
-    """Point-in-time fundamentals as of `as_of_date`. Tries SEC EDGAR first (US-GAAP
-    quarterly filers), then falls back to FMP for issuers EDGAR can't serve — foreign
-    20-F/40-F filers like ASML or PDD. Returns None when neither source has a
-    sufficiently recent filing, no price is available, or the ticker doesn't resolve;
-    the replay loop treats None as "skip". price_period defaults to "5y" because
-    backtest as-of dates can sit well before today.
+    """Point-in-time fundamentals as of `as_of_date`, entirely from SEC EDGAR: US-GAAP
+    quarterly filers (10-Q/10-K), plus annual / IFRS / foreign-currency filers
+    (20-F/40-F: ASML, PDD, CCEP, Ferrovial, Thomson Reuters) via the annual fallback in
+    build_filings_history. Returns None when no sufficiently recent filing exists, no
+    price is available, or the ticker doesn't resolve; the replay loop treats None as
+    "skip". price_period defaults to "5y" because as-of dates can sit well before today.
     """
-    snap = _edgar_fundamentals_as_of(ticker, as_of_date, price_period)
-    if snap is not None:
-        return snap
-    return _fmp_fundamentals_as_of(ticker, as_of_date, price_period)
+    return _edgar_fundamentals_as_of(ticker, as_of_date, price_period)
 
 
 def _edgar_fundamentals_as_of(
@@ -191,11 +193,13 @@ def _edgar_fundamentals_as_of(
     # grossly stale relative to as_of (see MAX_FILING_AGE_DAYS). Abstaining (None ->
     # the replay/specialist skips the name) is the capital-preservation choice over
     # silently trading on years-old numbers.
+    annual = latest.get("freq") == "annual"
+    report_cap = ANNUAL_MAX_FILING_AGE_DAYS if annual else MAX_FILING_AGE_DAYS
     report_age = _days_between(latest["report_date"], as_of_date)
-    if report_age is None or report_age > MAX_FILING_AGE_DAYS:
+    if report_age is None or report_age > report_cap:
         logger.warning(
             f"stale fundamentals for {ticker}: newest filing {latest['report_date']} "
-            f"is {report_age}d before {as_of_date} (cap {MAX_FILING_AGE_DAYS}d) — skipping"
+            f"is {report_age}d before {as_of_date} (cap {report_cap}d) — skipping"
         )
         return None
 
@@ -203,8 +207,9 @@ def _edgar_fundamentals_as_of(
     # filing date. A recently-filed filing that covers a year-old period signals a
     # concept misparse or a foreign filer whose us-gaap facts are sparse (e.g. SHOP
     # filing 40-F). Returning None lets get_fundamentals_as_of fall back to FMP.
+    period_cap = ANNUAL_MAX_PERIOD_AGE_DAYS if annual else MAX_FILING_AGE_DAYS + 120
     period_age = _days_between(latest["period_end_date"], as_of_date)
-    if period_age is None or period_age > MAX_FILING_AGE_DAYS + 120:
+    if period_age is None or period_age > period_cap:
         logger.warning(
             f"stale data period for {ticker}: period {latest['period_end_date']} "
             f"is {period_age}d before {as_of_date} — deferring to FMP fallback"
@@ -228,85 +233,6 @@ def _edgar_fundamentals_as_of(
         rev_growth_yoy=latest["rev_growth_yoy"],
         debt_to_equity=latest["debt_to_equity"],
         pe_ratio=calc_pe(price, latest["diluted_eps"]),
-    )
-
-
-def _fmp_fundamentals_as_of(
-    ticker: str, as_of_date: str, price_period: str
-) -> ValuationSnapshot | None:
-    """Fallback for issuers EDGAR can't serve (foreign 20-F/40-F filers). Quarterly
-    income-statement + ratios from FMP's stable API, point-in-time gated on FMP's
-    filingDate. Margin / YoY growth / debt-equity and FMP's priceToEarningsRatio are
-    unit-free ratios, so they are currency-correct even for non-USD reporters (ASML in
-    EUR, PDD in CNY) without any FX conversion. Same recency guard as the EDGAR path."""
-    from src.data import fmp_client
-    from src.data.edgar import _match_prior_year
-
-    def _f(x: Any) -> float:
-        try:
-            return float(x)
-        except (TypeError, ValueError):
-            return float("nan")
-
-    try:
-        inc = fmp_client._get(
-            "income-statement", {"symbol": ticker, "period": "quarter", "limit": 8}
-        )
-        rat = fmp_client._get("ratios", {"symbol": ticker, "period": "quarter", "limit": 8})
-    except fmp_client.FMPError as e:
-        logger.warning(f"FMP fundamentals fallback failed for {ticker}: {e}")
-        return None
-    if not isinstance(inc, list) or not inc:
-        return None
-
-    inc_by_date = {r["date"]: r for r in inc if r.get("date")}
-    rat_list = rat if isinstance(rat, list) else []
-    # Key ratios by (fiscalYear, period), not the period-end date string: FMP's
-    # income-statement and ratios endpoints occasionally disagree on the exact
-    # period-end by a day or two (e.g. CCEP 2025-06-27 vs 2025-06-30).
-    rat_by_key = {(r.get("fiscalYear"), r.get("period")): r for r in rat_list}
-
-    # Point-in-time: only periods whose FMP filingDate is on/before as_of.
-    filed = sorted(
-        (d for d, r in inc_by_date.items()
-         if r.get("filingDate") and r["filingDate"] <= as_of_date),
-        reverse=True,
-    )
-    if not filed:
-        return None
-    period = filed[0]
-    latest = inc_by_date[period]
-    report_date = latest["filingDate"]
-
-    report_age = _days_between(report_date, as_of_date)
-    if report_age is None or report_age > MAX_FILING_AGE_DAYS:
-        logger.warning(
-            f"stale FMP fundamentals for {ticker}: newest filing {report_date} "
-            f"is {report_age}d before {as_of_date} (cap {MAX_FILING_AGE_DAYS}d) — skipping"
-        )
-        return None
-
-    # YoY revenue growth (same-currency ratio). The prior-year period was filed long
-    # ago, so match against all known periods, not just those gated above.
-    prior = _match_prior_year(period, list(inc_by_date))
-    prior_row = inc_by_date.get(prior, {}) if prior else {}
-    rev_growth = calc_growth_yoy(_f(latest.get("revenue")), _f(prior_row.get("revenue")))
-
-    prices = _get_prices_dict(ticker, price_period)
-    pdates = sorted(d for d in prices if d <= as_of_date)
-    if not pdates:
-        return None
-
-    r = rat_by_key.get((latest.get("fiscalYear"), latest.get("period")), {})
-    return ValuationSnapshot(
-        price_date=pdates[-1],
-        report_date=report_date,
-        period_end_date=period,
-        diluted_eps=_f(latest.get("epsdiluted", latest.get("epsDiluted"))),
-        profit_margin=_f(r.get("netProfitMargin")),
-        rev_growth_yoy=rev_growth,
-        debt_to_equity=_f(r.get("debtToEquityRatio")),
-        pe_ratio=_f(r.get("priceToEarningsRatio")),
     )
 
 
