@@ -18,6 +18,7 @@ from datetime import date, timedelta
 
 from src.backtest.costs import CostModel
 from src.backtest.screen import FilingDatesFn, select_candidates
+from src.backtest.strategies import _is_fatal_error
 from src.forward.paper import PaperBook, run_forward_step
 from src.risk import RiskConfig
 from src.schemas import Decision
@@ -70,7 +71,13 @@ async def run_forward_session(
     decisions: list[Decision] = []
     skipped: list[str] = []  # candidates the provider couldn't decide (missing data)
     for ticker in candidates:
-        decision = await decision_provider(ticker, as_of)
+        try:
+            decision = await decision_provider(ticker, as_of)
+        except Exception as e:
+            if _is_fatal_error(e):  # billing/auth/budget cap — abort, don't mask
+                raise
+            logger.warning(f"skipping {ticker}: {type(e).__name__}: {e}")
+            decision = None
         if decision is not None:
             decisions.append(decision)
         else:
