@@ -80,6 +80,7 @@ class PaperBook:
             self.decision_log.append({
                 "date": date, "ticker": d.ticker,
                 "direction": d.direction, "confidence": d.confidence,
+                "rationale": d.rationale,  # persist the "why" for the audit trail
             })
 
 

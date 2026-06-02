@@ -7,9 +7,9 @@ Ties the whole forward stack into a single command:
   layer -> execute against the persistent PaperBook) -> save.
 
 Two price/news sources (--source):
-- "fmp": daily bars from FMP, no broker. The paper book is simulated, so IBKR is NOT
-  needed to run the forward clock — only later for real order execution. (News-off for
-  now; an FMP news adapter is the follow-up. This is the runnable path today.)
+- "fmp": daily bars + news from FMP, no broker. The paper book is simulated, so IBKR
+  is NOT needed to run the forward clock — only later for real order execution. This is
+  the runnable path today.
 - "ibkr": prices + Benzinga news from a running IB Gateway/TWS. Needs the Gateway up +
   a market-data subscription; the connect/refresh must be validated live (CI has none).
 
@@ -37,6 +37,7 @@ from src.backtest.costs import CostModel
 from src.data.dividends import load_dividends
 from src.data.edgar import recent_filing_dates
 from src.data.fetch_prices import get_prices, load_latest_cache
+from src.data.fmp_client import get_stock_news
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of
 from src.data.universe import nasdaq100_as_of
@@ -49,6 +50,7 @@ from src.forward.ibkr import (
     refresh_price_cache,
 )
 from src.forward.paper import DEFAULT_BOOK_PATH, PaperBook
+from src.forward.report import session_digest, write_digest
 from src.forward.session import run_forward_session
 from src.risk import RiskConfig, annualized_volatility
 
@@ -114,6 +116,30 @@ def refresh_prices_fmp(tickers: list[str], period: str = "5y") -> None:
     logger.info(f"FMP price refresh: {ok}/{len(tickers)} tickers cached (period={period})")
 
 
+def fmp_news_source():
+    """A lazy NewsSource backed by FMP: fetches a ticker's recent news on demand (only
+    for screened candidates), point-in-time filtered to published <= as_of."""
+    from datetime import date as _date
+
+    def source(ticker: str, as_of: str, lookback_days: int) -> list[dict]:
+        start = (_date.fromisoformat(as_of) - timedelta(days=lookback_days)).isoformat()
+        out: list[dict] = []
+        for r in get_stock_news(ticker, start, as_of, limit=50):
+            pub = (r.get("publishedDate") or "")[:10]
+            if not pub or pub > as_of or pub < start:  # point-in-time + window
+                continue
+            out.append({
+                "title": r.get("title", ""),
+                "summary": r.get("text", ""),
+                "published": pub,
+                "source": r.get("site") or r.get("publisher", ""),
+                "url": r.get("url", ""),
+            })
+        return out
+
+    return source
+
+
 # ==========================================
 # ONE FORWARD SESSION
 # ==========================================
@@ -141,10 +167,6 @@ async def run_forward_paper_session(
     period = FORWARD_PRICE_PERIOD if price_source == "ibkr" else "5y"
     news_store: dict[str, list[dict]] = {}
 
-    if price_source == "fmp" and include_news:
-        logger.warning("FMP news adapter not built yet — running news-off for this session.")
-        include_news = False
-
     if refresh:
         if price_source == "ibkr":
             ib = await connect()
@@ -157,6 +179,14 @@ async def run_forward_paper_session(
         else:
             refresh_prices_fmp(tickers, period)
 
+    # News source: FMP fetches lazily per candidate; IBKR uses the pre-fetched store.
+    if not include_news:
+        news_source = news_source_from_store({})
+    elif price_source == "fmp":
+        news_source = fmp_news_source()
+    else:
+        news_source = news_source_from_store(news_store)
+
     client = AsyncAnthropic()
     base_mc = BatchLLM(client) if use_batch else client.messages
     mc = base_mc
@@ -168,7 +198,7 @@ async def run_forward_paper_session(
         run_forward_decision, mc,
         fundamentals_loader=partial(get_fundamentals_as_of, price_period=period),
         technicals_loader=partial(get_technicals_as_of, price_period=period),
-        news_source=news_source_from_store(news_store),
+        news_source=news_source,
         include_news=include_news,
         signal_cache=SignalCache(SIGNAL_CACHE_DIR),
         summary_cache=FilingSummaryCache(SUMMARY_CACHE_DIR),
@@ -189,6 +219,8 @@ async def run_forward_paper_session(
         risk_config=risk_config,
     )
     book.save(book_path)
+    digest = session_digest(book, summary)
+    logger.info("session digest -> %s\n%s", write_digest(as_of, digest), digest)
     return summary
 
 

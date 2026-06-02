@@ -66,10 +66,13 @@ async def run_forward_session(
         candidates = sorted(set(eligible_universe) | set(held))
 
     decisions: list[Decision] = []
+    skipped: list[str] = []  # candidates the provider couldn't decide (missing data)
     for ticker in candidates:
         decision = await decision_provider(ticker, as_of)
         if decision is not None:
             decisions.append(decision)
+        else:
+            skipped.append(ticker)
 
     # Prices for MTM + execution: everything held or freshly decided. Drop names with
     # no current price (can't mark or trade them this session).
@@ -97,6 +100,7 @@ async def run_forward_session(
         "candidates": len(candidates),
         "decided": len(decisions),
         "directions": counts,
+        "skipped": skipped,
         "open_positions": len(book.positions),
         "equity": book.equity_curve[-1]["total_value"] if book.equity_curve else book.cash,
     }

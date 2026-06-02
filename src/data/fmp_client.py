@@ -69,6 +69,23 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any:
     return data
 
 
+def get_stock_news(
+    ticker: str, from_date: str, to_date: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Recent news for a ticker over [from_date, to_date] (FMP stable `news/stock`).
+    Rows include publishedDate, title, text, site, url. Empty list on failure / if the
+    endpoint is not on the current plan — news is optional, never fatal."""
+    try:
+        data = _get(
+            "news/stock",
+            params={"symbols": ticker, "from": from_date, "to": to_date, "limit": limit},
+        )
+    except FMPError as e:
+        logger.warning(f"FMP news fetch failed for {ticker}: {e}")
+        return []
+    return data if isinstance(data, list) else []
+
+
 def get_bulk_csv(path: str, params: dict[str, Any] | None = None) -> str:
     """GET a bulk endpoint and return raw CSV text. FMP's `*-bulk` endpoints
     (Premium) return CSV (all companies per period), not JSON. Raises FMPError on
