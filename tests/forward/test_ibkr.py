@@ -100,3 +100,14 @@ async def test_fetch_news_for_builds_store_with_bodies():
     assert store["AAA"][0]["title"] == "Acme beats"
     assert store["AAA"][0]["summary"] == "the full article text"
     assert store["AAA"][0]["published"] == "2026-05-20"
+
+
+def test_duration_str_uses_years_beyond_365_days():
+    """IBKR rejects day-durations over 365; the helper switches to whole years,
+    rounded up so indicator lookback stays covered (live-validated: '400 D' was
+    rejected, '2 Y' returns ~500 daily bars)."""
+    from src.forward.ibkr import _duration_str
+    assert _duration_str(200) == "200 D"
+    assert _duration_str(365) == "365 D"
+    assert _duration_str(400) == "2 Y"      # >365 -> years, ceil(400/365)=2
+    assert _duration_str(800) == "3 Y"

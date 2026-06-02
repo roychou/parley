@@ -21,6 +21,7 @@ adapter.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from collections.abc import Iterable
 
@@ -100,13 +101,21 @@ def news_source_from_store(store: dict[str, list[dict]]) -> NewsSource:
 # ==========================================
 
 
+def _duration_str(lookback_days: int) -> str:
+    """IBKR rejects day-durations over 365 ("must be made in years"); express longer
+    windows in whole years, rounded up so the indicator lookback stays covered."""
+    if lookback_days > 365:
+        return f"{math.ceil(lookback_days / 365)} Y"
+    return f"{lookback_days} D"
+
+
 async def fetch_daily_bars(ib: IB, ticker: str, lookback_days: int = 400) -> dict[str, dict]:
     """Daily TRADES bars for the trailing window (enough trailing history for the
     technical indicators). Returns our price-dict format."""
     contract = Stock(ticker, "SMART", "USD")
     await ib.qualifyContractsAsync(contract)
     bars = await ib.reqHistoricalDataAsync(
-        contract, endDateTime="", durationStr=f"{lookback_days} D",
+        contract, endDateTime="", durationStr=_duration_str(lookback_days),
         barSizeSetting="1 day", whatToShow="TRADES", useRTH=True,
     )
     return _bars_to_price_dict(bars or [])
