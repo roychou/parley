@@ -29,9 +29,16 @@ certainly do not deploy capital) until it is met.
   event-driven screen, four baselines (SPY-hold, random, RSI, P/E-ranking),
   metrics (Sharpe, maxDD, hit rate, vs-SPY).
 - Multi-agent pipeline: fundamentals + technicals + sentiment → `synthesize()`.
-- Disciplined data layer: EDGAR (PIT fundamentals + filing narrative), cached
-  prices, PIT S&P 500 membership; signal- and filing-keyed caching; Batch API.
+- Disciplined data layer: EDGAR (PIT fundamentals + filing narrative) with an **FMP
+  fallback for foreign filers** EDGAR can't serve, cached prices, PIT **Nasdaq-100**
+  membership (authoritative, from QQQ SEC N-PORT filings); signal/filing-keyed
+  caching; Batch API. Hardened 1 Jun: revenue-concept recency + YoY-tolerance fixes,
+  a fundamentals recency guard (abstain on stale data), and the SPY-benchmark
+  commission fix (vs-SPY/alpha-beta were silently null under realistic costs).
 - Reproducibility scaffolding: per-kind cache versioning, full decision audit log.
+- **Specialists validated (1 Jun)** via the live grounding probe: technicals and
+  fundamentals both ground their reasoning in the data (3/3 each on corrected data);
+  synthesis is a deterministic confidence-weighted vote (no LLM).
 
 **Fiction / missing (the gap to real money):**
 - **Training-data contamination (the big one).** LLM decisions over in-training-window
@@ -47,6 +54,9 @@ certainly do not deploy capital) until it is met.
   (Sector limits + long/short still open.)
 - **Execution path: partial** — forward paper harness + IBKR price/news adapters
   built (mock-tested); IBKR execution adapter + live validation + monitoring remain.
+  (1 Jun: the live/forward specialist path itself was found broken — the MCP servers
+  didn't load `.env`, and `EDGAR_USER_AGENT` was unset — both fixed; the forward path
+  now fetches real data, pending only a Gateway.)
 - ~~No LLM-production guardrails~~ — **mostly resolved (Phase 3)**: model pinning
   (3.1), bounded sizing via the risk cap (3.2), prompt-injection hardening (3.3),
   spend cap. Live-data monitoring/kill-switch (ops) remain.
@@ -211,16 +221,18 @@ persistent infra (VM + IBC + cron) only when going real-money.
   validation run overran to ~$120; aborts at the cap, resumes from the warm cache.
 
 **Remaining to run forward:**
-1. **Operator setup** — IB Gateway (paper) + US market-data subscription (~$10/mo) +
-   Anthropic credits topped up.
+1. **Operator setup** — Anthropic credits **✓ topped up**; **IBKR paper account still
+   pending approval** (the current blocker), then IB Gateway (paper) + US market-data
+   subscription (~$10/mo).
 2. **Live validation** — run a session, confirm IBKR price/news adapters return real
    bars + headlines, reconcile sizing/execution.
 3. **Later** — IBKR **execution** adapter (place paper orders) + scheduler (cron/launchd).
 
-**Immediate next step (next session):** operator spins up IB Gateway (paper) + data
-sub; then build the wiring entrypoint and **validate the IBKR price/news adapters live
-on a couple of tickers**, then start the weekly forward clock (with the news on/off
-ablation running from day one).
+**Immediate next step (gated on IBKR):** the moment the paper account opens — spin up
+IB Gateway + data sub, **validate the IBKR price/news adapters live on a couple of
+tickers**, then start the weekly forward clock (news on/off ablation from day one).
+Everything upstream of the Gateway is built, fixed, and validated; the forward clock
+is the only thing that accrues a real edge verdict, so start it ASAP.
 
 ---
 
@@ -348,28 +360,30 @@ Sequenced by value, and only once the edge is validated and risk-controlled:
 ## Open decisions needed from the operator
 
 1. Long-only or long/short / market-neutral?
-2. Universe (S&P 500? broader? liquidity floor?).
+2. ~~Universe~~ — **resolved: point-in-time Nasdaq-100** (QQQ N-PORT; --nasdaq100).
 3. Initial capital and personal max-drawdown budget.
-4. Broker (Alpaca vs. IBKR).
+4. ~~Broker~~ — **resolved: IBKR** (Singapore-resident; Alpaca unavailable).
 5. Rebalance cadence for *live* (vs. backtest) — costs and taxes argue slower.
 
 ---
 
 ## Immediate next step
 
-Phase 0.1–0.5 are **done** (costs, dividends, walk-forward, run log, alpha/beta).
-The gating work is now **0.0 — temporal validity**, which reframes the costed run:
+Phase 0 is **done** (costs, dividends, walk-forward, run log, alpha/beta, temporal
+gate). The whole pipeline is built, the data layer is hardened, the specialists are
+validated, and clean-window backtests run end-to-end (they confirm plumbing, not
+edge — the post-cutoff window is too short and the universe rallies dominate; this
+is expected and unchanged). **The only thing left that produces a real edge verdict
+is the forward paper-trading clock, and it is blocked solely on the IBKR paper
+account opening.**
 
-1. **Identify the post-cutoff window.** Confirm the specialist models' training
-   cutoffs; the clean decision dates are those strictly after. Expect ~6–12 months
-   against our May-2026 data edge.
-2. **Design the GATE-0 run as post-cutoff-only** (short, low-power, but *clean*), and
-   plan the **anonymization probe** (named vs. anonymized) to size the contamination
-   gap on the in-window data.
-3. Treat any in-window backtest as **engineering validation**, not edge evidence.
-4. The real edge verdict comes from **forward paper trading** (Phase 2) — start that
-   clock as early as possible, since it's the only fully clean evaluation and it only
-   accrues with calendar time.
+So there is no further upstream build that moves the needle:
+1. **When IBKR opens** — Gateway + data sub, live-validate the price/news adapters on
+   a couple of tickers, then **start the weekly forward clock** (news on/off ablation
+   from day one). This is the priority; it only accrues with calendar time.
+2. **While waiting** — optional polish only (e.g. an equal-weight-universe baseline
+   for honest backtest comparison; sector/concentration limits; IBKR execution
+   adapter). None are gating.
 
-Do not spend on a large in-training-window run expecting an edge answer — it can't
-give one.
+Do not spend on more in-window backtests expecting an edge answer — they can't give
+one. The clock is the answer.
