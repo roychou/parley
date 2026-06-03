@@ -1,102 +1,154 @@
 # Architecture
 
-This document captures the architectural decisions behind Parley and the reasoning behind them.
+The architectural decisions behind Parley and the reasoning behind them.
 
 ## The system
 
-Parley is a multi-agent system for analyzing US equities. A supervisor dispatches a ticker query to specialist agents in parallel, receives typed Pydantic outputs from each, and synthesizes a BUY/HOLD/SELL recommendation. Each specialist exposes its data-access tools through an MCP server. The supervisor never calls data sources directly — it reads specialist outputs only.
+Parley analyzes US equities with a multi-agent pipeline and trades them on an Interactive
+Brokers **paper** account. A supervisor dispatches a ticker query to specialist agents in
+parallel, receives typed Pydantic outputs, and synthesizes a BUY/HOLD/SELL decision; a risk
+layer turns decisions into sized positions; an execution layer places the orders. The
+supervisor never calls data sources directly — it reads specialist outputs only.
 
-Release 1 ships: supervisor, two specialists (fundamentals, technicals), deterministic synthesis, an eval harness with grounding evals for both specialists, and a backtest harness. Releases 2 and 3 expand the specialist set and replace deterministic synthesis with an LLM-driven supervisor.
+It runs in two access patterns that share prompts, schemas, and synthesis but fork at the
+data/execution boundary (see "Two-regime / two-pattern split"):
+- **Live / forward** — the production path. A weekly clock decides on fresh data and executes
+  on the paper account. Forward paper trading is the project's *only* clean edge evaluation
+  (see "Why forward, not backtest").
+- **Backtest** — point-in-time replay over history, for engineering validation + baselines.
 
-**Current component inventory:**
-- `src/supervisor.py` — dispatches specialists via `asyncio.gather`, then calls `synthesize()`
-- `src/synthesis.py` — deterministic confidence-weighted vote; BUY/SELL thresholds at ±0.3 weighted score
-- `src/agents/fundamentals_specialist.py`, `src/agents/technicals_specialist.py` — agent loops over MCP tool calls
-- `src/mcp_servers/fundamentals_server.py`, `src/mcp_servers/technicals_server.py` — FastMCP servers; each exposes one tool
-- `src/schemas/` — Pydantic schemas: `SpecialistSignal` base, `FundamentalsAnalysis`, `TechnicalsAnalysis`, `Decision`
-- `src/evals/judge.py` — reusable LLM-as-judge wrapper; tool-use forcing for structured output
-- `src/evals/base.py` — `EvalProtocol` and `EvalResult` contracts
-- `evals/fundamentals/grounding.py`, `evals/technicals/grounding.py` — grounding eval per specialist
-- `src/data/fundamentals.py`, `src/data/technicals.py`, `src/data/fetch_prices.py` — data pipelines
-- `src/data/fmp_client.py` — thin REST wrapper for the FMP stable API (single data provider for both fundamentals and prices)
+**Component inventory:**
+- `src/supervisor.py` — dispatches specialists via `asyncio.gather`, then `synthesize()`
+- `src/synthesis.py` — deterministic, agreement-weighted confidence vote (no LLM); explicit
+  disagreement handling; BUY/SELL thresholds on the weighted score
+- `src/agents/` — `fundamentals_specialist`, `technicals_specialist`, `sentiment_specialist`
+  (map-reduce over EDGAR filing narrative), `news_specialist`; `scaffold.py`, `safety.py`
+  (prompt-injection hardening)
+- `src/mcp_servers/` — FastMCP tool surfaces per specialist (used by the standalone path)
+- `src/schemas/` — `SpecialistSignal` base + `FundamentalsAnalysis`/`TechnicalsAnalysis`/
+  `NewsAnalysis`/`Decision`
+- `src/data/` — `edgar.py` (PIT XBRL fundamentals + filings), `fundamentals.py`, `technicals.py`,
+  `fetch_prices.py` (price cache), `universe.py` (PIT Nasdaq-100 from QQQ N-PORT), `dividends.py`,
+  `sectors.py`, `filings.py`
+- `src/risk.py` — inverse-vol sizing, per-name/sector/gross caps, drawdown governor/kill switch
+- `src/backtest/` — `replay.py`, four baselines (`strategies.py`), `costs.py`, `metrics.py`,
+  `validation.py` (walk-forward), `runlog.py`, `temporal.py` (contamination guard), `budget.py`,
+  `batch.py` (Batch API), `screen.py` (event-driven candidate screen)
+- `src/forward/` — `paper.py` (`PaperBook`), `decide.py`, `session.py`, `run.py` (entrypoint),
+  `ibkr.py` (price + news adapters), `ibkr_execution.py` (order placement), `notify.py`
+- `src/models.py` — single registry of pinned model IDs + training cutoffs + prices
+- `deploy/` — Docker stack (hand-rolled IB Gateway + IBC, supercronic scheduler); `notes/deployment.md`
+- `evals/` — per-specialist grounding + consistency evals
 
 ## Multi-agent over single-agent
 
-Single-agent trading systems are simpler to build but harder to evaluate and harder to debug. When a single-agent system gets a call wrong, there is no clean way to localize whether the failure was in the technicals reasoning, the fundamentals reasoning, or the synthesis — the model did all of it in one pass.
-
-Multi-agent costs more (more LLM calls per decision, more orchestration code, more failure modes) but produces a system where each component has a job small enough to evaluate independently. The eval harness measures specialists individually before measuring synthesis. If a specialist is consistently wrong about something, that surfaces in its eval before it pollutes the supervisor's decisions.
-
-The cost is real. Each decision triggers N+1 model calls instead of one, latency multiplies, and the orchestration layer has to be designed and maintained. Those costs are accepted in exchange for separability.
+A single-agent system is simpler to build but harder to evaluate and debug: when it gets a call
+wrong, there's no clean way to localize whether the failure was in technicals, fundamentals, or
+synthesis. Multi-agent costs more (N+1 model calls per decision, more orchestration, more failure
+modes) but gives each component a job small enough to evaluate independently — the eval harness
+measures specialists individually before synthesis can pollute a decision. Those costs are
+accepted in exchange for separability.
 
 ## Direct Anthropic SDK over LangGraph
 
-LangGraph is the obvious framework choice for multi-agent orchestration. Choosing not to use it requires explanation.
-
-Three reasons. First, the orchestration layer is small enough that owning it directly is cheaper than the abstraction tax. Supervisor dispatch and synthesis fit in a few hundred lines of focused code; LangGraph's value proposition assumes more complexity than this system has. Second, MCP is a first-class part of the design (see below), and the cleanest path to MCP is through the Anthropic SDK and the MCP Python package, not through a framework that wraps both. Third, the LangChain ecosystem has been less stable than the underlying SDKs over the past year — committing to LangGraph for an 11-week build introduces ecosystem risk that a direct-SDK approach doesn't carry.
-
-The tradeoff: more code to own. Mitigated by keeping the orchestration layer small and focused. If the synthesis logic grows enough to justify a framework, switching is a refactor, not a rewrite.
+The orchestration layer is small enough that owning it directly is cheaper than the abstraction
+tax — supervisor dispatch + synthesis fit in a few hundred lines. MCP is a first-class part of the
+design, and the cleanest path to MCP is the Anthropic SDK + the MCP package, not a framework that
+wraps both. And the LangChain ecosystem has been less stable than the underlying SDKs. The
+tradeoff is more code to own, mitigated by keeping the layer small; if synthesis grows enough to
+justify a framework, switching is a refactor, not a rewrite.
 
 ## MCP for specialist tool surfaces
 
-Each specialist exposes its data-access tools through an MCP server. The fundamentals specialist's MCP server exposes tools for revenue lookup, ratio calculation, earnings history. The technicals specialist's MCP server exposes tools for price history, indicator computation, pattern checks.
-
-This is more work than wiring tools directly into the supervisor's process via Pydantic schemas. Two reasons it's worth the work.
-
-First, protocol-level isolation: each specialist's tool surface is independently versionable, independently testable, and independently runnable. A bug in the fundamentals tool layer cannot corrupt the technicals tool layer because they live behind separate MCP servers with separate process boundaries.
-
-Second, reusability: a well-designed MCP server for financial fundamentals or for technical indicators is useful outside this project. Anything that needs the same data through an agent can plug into the same server.
-
-The cost is the protocol overhead — JSON-RPC over a transport, server lifecycle management, schema definitions duplicated between server and client. Acceptable for the isolation properties.
+Each specialist exposes its data-access tools through an MCP server, for protocol-level isolation
+(each surface is independently versionable/testable/runnable behind a process boundary) and
+reusability. The cost is protocol overhead (JSON-RPC, server lifecycle, schemas duplicated between
+server and client), accepted for the isolation. *(The forward path calls the data layer directly
+for point-in-time control + speed; MCP is the standalone/interactive path — see the fork below.)*
 
 ## Pydantic for structured outputs throughout
 
-Specialist outputs are Pydantic-typed. Tool input schemas are derived from Pydantic models via `model_json_schema()`. The supervisor receives `TechnicalAnalysis` and `FundamentalAnalysis` objects, not free-text JSON to be parsed.
+Specialist outputs are Pydantic-typed; tool input schemas derive from the models. The supervisor
+receives typed objects, not free-text JSON to parse. This makes outputs comparable across runs
+(the eval harness depends on it), enforces contracts at the agent boundary (synthesis depends on
+it), and aids debugging. The cost is rigidity — a new field means a schema change — the right
+trade for a system where reliability matters more than flexibility. Forced tool-use guarantees
+schema-valid output without parsing/extraction.
 
-Pydantic-everywhere makes specialist outputs comparable across runs (the eval harness depends on this), enforces contracts at the boundary between agents (synthesis depends on this), and makes the system more debuggable when things go wrong. The cost is rigidity — adding a new field to a specialist's output means updating its schema. The right tradeoff for a system whose reliability matters more than its flexibility.
+## Data layer — IBKR + EDGAR, no paid vendor
 
-## Data layer — two-regime split
+Two sources, chosen so the system carries no data-vendor subscription (it briefly used FMP for
+prices/foreign fundamentals; that was removed):
+- **SEC EDGAR** — point-in-time XBRL fundamentals + filing narrative, by CIK (permanent), with
+  true `filed` dates. Foreign private issuers (20-F/40-F, IFRS) are handled via an annual/IFRS
+  fallback. `ValuationSnapshot.report_date` is the **actual filing date** (not period-end) — the
+  correct availability anchor for point-in-time replay, since filings land 60–90 days after close.
+- **IBKR** — daily price bars (cached to `data/cache/`) and Benzinga news, via `ib_async` against
+  a running Gateway. Sectors come from a committed static map; the Nasdaq-100 universe is
+  reconstructed point-in-time from QQQ's SEC N-PORT filings.
 
-Fundamentals data and technicals data have fundamentally different update cadences, which shapes the data layer design.
+**Two-pattern split.** Fundamentals move ~quarterly (filing-keyed cache, signal reuse within a
+P/E band); prices move daily (cache warmed from IBKR each run). The same split maps to the
+backtest-vs-forward fork: the **backtest** calls the data layer directly with point-in-time
+filters; the **forward** path warms caches from IBKR then reads them. Both share prompts,
+schemas, and `synthesize()` — forked at the boundary, core preserved.
 
-Fundamentals data (revenue, EPS, margins, P/E, debt ratios) comes from quarterly filings. The data changes four times a year. The fundamentals pipeline fetches from FMP (Financial Modeling Prep, `stable` API, sourced from SEC EDGAR filings) and caches to disk (`data/cache/fundamentals/`). Re-fetching on every run is wasteful; a cache with a TTL that aligns with reporting cadence is the right design. The specialist reads cached data unless the cache is stale.
+## Risk layer
 
-`ValuationSnapshot.report_date` is the **actual SEC filing date** (FMP `filingDate`/`acceptedDate`), not the fiscal period-end. This matters for the backtest: companies file 60–90 days after period close, so the filing date is the correct availability anchor for point-in-time-accurate replay. `period_end_date` is preserved as a separate field for reference.
+A layer between synthesis and execution that owns capital preservation; it constrains, it does
+not vote. Inverse-vol position sizing (confidence only tilts), a hard per-name cap, a per-sector
+cap, max-gross (pro-rata scale-down, no leverage), and a drawdown governor that tapers new risk
+to zero between soft (−10%) and hard (−20%) thresholds. Used identically by the backtest and the
+live broker path, so a successful prompt-injection is at worst one bounded, risk-capped vote.
 
-Technicals data (price history, SMA, RSI) changes daily. The technicals pipeline fetches fresh price history from FMP on each run and computes indicators in-process. Caching is not appropriate here — the value of the technicals signal depends on it being current.
+## Execution
 
-This two-regime split — slow-moving filings vs. fast-moving price data — maps to the two MCP servers and the two data pipelines. It's why the fundamentals server and the technicals server have different data access patterns even though they look structurally identical from the outside.
+`src/forward/ibkr_execution.py` is the **only** code that transmits orders. Safety model:
+a paper-account guard (`_assert_paper`) requires every managed account id to start `DU` and is
+re-checked immediately before any send; `transmit` defaults to False (orders previewed, not sent);
+market orders only, whole shares, sized against real account equity and dropped if over-equity.
+Real placement needs an explicit flag **and** Gateway's Read-Only API off. See `notes/deployment.md`.
 
-**Single-provider data layer.** Both data types route through `src/data/fmp_client.py` — a thin REST wrapper around FMP's stable API. The wrapper exposes three endpoints (`income-statement`, `balance-sheet-statement`, `historical-price-eod/full`). The exported interfaces (`get_prices()`, `get_fundamentals()`) are stable across data-provider changes; downstream code (MCP servers, agents, specialists, evals) is provider-agnostic.
+## Why forward, not backtest (the methodology core)
+
+When an LLM makes the decisions, a backtest over dates *inside the model's training window* is
+contaminated by construction: the model has ingested what these tickers did. The leakage is in the
+weights, not the inputs, so point-in-time *data* hygiene does not fix it — an in-window backtest
+measures memory + strategy, confounded, and inflates exactly the multi-agent line we care about.
+`src/backtest/temporal.py` operationalizes the split (clean vs. contaminated decision dates); the
+honest conclusion is that **a backtest cannot establish this strategy's edge** — the clean
+post-cutoff window is too short for significance. **Forward paper trading is the only clean
+evaluation**, which is why it's the production path. Models are pinned (`src/models.py`) so the
+forward record stays clean relative to a fixed training cutoff; a model upgrade is a deliberate
+re-validation event. Full reasoning + the gating: `notes/productization.md` (GATE 0).
 
 ## Eval approach
 
-The eval harness evaluates specialists independently before evaluating synthesis. The principle: if a specialist's reasoning is systematically wrong about something, that should surface in its eval before it affects the supervisor's decisions.
+The harness evaluates specialists independently before synthesis. **Grounding** asks: does the
+reasoning accurately reflect the data given? (not whether the call is right — that needs future
+prices). **LLM-as-judge with forced tool-use** for structured verdicts (`src/evals/judge.py`).
+**Planted-failure tests as calibration gates** — all-pass is consistent with both "judge works"
+and "judge rubber-stamps"; a planted contradiction distinguishes them, so every eval flavor ships
+with one, asserting on verdict + evidence-of-detection (not the judge's internal categorization).
+A greppable `api_usage call_site=… input_tokens=… output_tokens=… model=…` line at every call
+site makes per-run cost aggregatable from logs.
 
-**Grounding** is the first eval flavor for both specialists. Grounding asks: does the specialist's reasoning accurately reflect the data it was given? It does not ask whether the signal (BULLISH/BEARISH) is the right call — that requires ground truth from future price moves. Grounding is checkable now, against the data already in the system.
+## Scope
 
-**LLM-as-judge with structured output.** `src/evals/judge.py` wraps a single Anthropic API call. The judge is given a system prompt (rubric), a user prompt (evidence + reasoning to evaluate), and a Pydantic schema. Tool-use forcing ensures the model returns structured output matching the schema — no parsing, no extraction logic. The eval module constructs the prompts and schema; `judge.py` is a pure API wrapper.
+**Paper trading.** Real-money execution is a deliberate future step gated on the forward record
+clearing GATE 0 — not out of scope forever, but consciously not yet. No web UI; no options, bonds,
+crypto, or multi-asset. The narrow surface is itself architectural: every added surface dilutes the
+depth of the core.
 
-**Planted-hallucination tests as calibration gates.** Three all-pass results are consistent with both "the judge works correctly" and "the judge rubber-stamps." A planted contradiction — a `FundamentalsAnalysis` or `TechnicalsAnalysis` constructed to contain a known error — distinguishes them. Every new eval flavor ships with a planted-failure test. The test asserts on verdict + evidence-of-detection, not on the judge's internal categorization. Over-specifying categorization produces flaky tests when the judge has legitimate discretion in how it decomposes multi-clause reasoning.
+## Known gaps / what this might get wrong later
 
-**Token logging convention.** Every API call site logs usage in a greppable format:
-```
-api_usage call_site=<site> input_tokens=<n> output_tokens=<n> model=<model>
-```
-Call sites: the specialist agent loop, `src/evals/judge.py`. This convention is future-aggregatable — per-run cost can be derived by grepping log output without modifying any code.
+- **Synthesis is a deterministic vote**, not risk-aware or LLM-driven. A structured/LLM supervisor
+  is a Phase-5 option; the synthesis eval checks Decision-vs-inputs consistency, so it survives that.
+- **Sector-blind fundamentals thresholds** (absolute P/E/margin/D/E cutoffs) misfire on banks/REITs/
+  utilities/low-margin retail. Sector-relative thresholds are parked (`notes/productization.md`).
+- **Bank/financials fundamentals** can't be read by the revenue-concept extraction (no clean
+  `Revenues` tag) — they abstain.
+- **Operational depth** — reconciliation (modeled-vs-broker diff), richer fill/P&L/staleness
+  monitoring, and a human-wired kill switch are still thin (Phase 2.3/2.4).
 
-## Out of scope
-
-No real-money execution. No broker integration. No production-grade risk controls. No web UI. No options, bonds, crypto, or multi-asset support. These are out of scope across all releases.
-
-The decision to keep the surface narrow is itself architectural. Every additional surface dilutes the depth of the core system.
-
-## What this might get wrong later
-
-- **Synthesis.** The current deterministic vote (confidence-weighted score, ±0.3 thresholds) is a stub. Release 2 replaces it with an LLM-driven supervisor that has discretion in weighting and rationale. That transition will need its own writeup. The eval harness is designed to survive it — the synthesis eval checks internal consistency of the Decision against specialist inputs, not against formula output, so it remains valid when the formula goes away.
-- **Model selection.** `judge.py` defaults to `claude-sonnet-4-6` with a single-line swap to Haiku. If API cost forces a cheaper model for some eval types, that's a per-eval decision, not a system-wide change. Specialists currently use Sonnet; the token logging convention lets cost be derived from logs before committing to a cheaper model.
-- **MCP server reusability.** The reusability claim weakens if both MCP servers turn out to be thin wrappers with no logic worth sharing. The protocol-isolation argument remains valid regardless.
-- **Fundamentals cache TTL.** The cache design assumes quarterly data. If a ticker reports mid-quarter corrections or the cache grows stale in test environments, the TTL logic will need explicit handling. Not designed yet.
-- **Sector-blind fundamentals thresholds.** The fundamentals specialist prompt uses absolute thresholds (P/E < 40, margin > 20%, D/E < 2). These thresholds are not sector-agnostic in practice — banks, REITs, utilities, and retailers all have structurally different valuation and margin profiles. The current rules will produce systematic BEARISH bias in capital-intensive and low-margin sectors. Acknowledged limitation; sector context (a `sector` field in the fundamentals tool result) and sector-relative comparisons are planned for Release 2. See `notes/release-2-or-3-candidates.md`.
-- **`supporting_technicals` schema and temporal claims.** The DIRECTIONAL/TEMPORAL grounding rule requires explicit lookback metadata (e.g., "20-day momentum") to evaluate trend claims. `TechnicalsAnalysis` currently has `date_range` but no per-indicator lookback window. This is not a blocking gap for current eval runs — planted-failure tests confirmed the judge correctly flags trend claims without temporal grounding. It becomes a real gap when the specialist starts making legitimate trend claims that should be grounded but aren't.
-
-This document is updated at end-of-sprint when the gap between the doc and the code becomes large enough to mislead a reader.
+This document is updated when the gap between it and the code grows large enough to mislead.

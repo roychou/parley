@@ -58,6 +58,6 @@ path (the semaphore handles a single filing fine).
   give the specialist a `search_filing(query)` tool so it reads only the passages it
   wants instead of map-reducing the whole narrative. Lighter than a full RLM scaffold
   (which is overkill at 10-K sizes — see sentiment-specialist-design.md), and it cuts
-  tokens, helping cost *and* throughput. See release-2-or-3-candidates.md.
+  tokens, helping cost *and* throughput. (Parked in productization.md → Phase 5+.)
 - A global token-bucket limiter is the alternative if we ever need the *inline* path
   at scale (keeps tier 1, paces the whole run); batch is the better answer for backtests.

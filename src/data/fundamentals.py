@@ -32,7 +32,6 @@ def _days_between(earlier: str, later: str) -> int | None:
         return None
 
 CACHE_DIR = Path("data/cache/fundamentals")
-UNIVERSE_FILE = Path("notes/universe.md")
 
 
 # --- Immutable Data Model ---

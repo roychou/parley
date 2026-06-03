@@ -1,43 +1,61 @@
 # Parley
 
-Multi-agent equities trading bot. Paper trading only. Demonstrates: production-quality multi-agent orchestration, eval-driven product development, and MCP fluency, all without leaning on framework abstractions.
+A multi-agent system that analyzes US equities and trades them on a **paper** account.
+Specialist agents (fundamentals, technicals, sentiment, news) each produce a typed analysis;
+a supervisor synthesizes them into a BUY/HOLD/SELL decision; a risk layer sizes the position;
+and the result is executed against an Interactive Brokers paper account. Built on the direct
+Anthropic SDK with an own orchestration layer — deliberately not a framework.
 
-## What it does
+> Paper trading only. Nothing here is financial advice; trading real money carries real risk
+> of loss. Real-money execution is a future, deliberate step (see `notes/productization.md`).
 
-Parley analyzes US equities and produces BUY/HOLD/SELL recommendations through a multi-agent system. A supervisor agent dispatches questions to specialist agents (fundamentals, technicals, news, risk), receives structured analyses, and synthesizes a final decision. Performance is measured by an eval harness against three baselines: random, buy-and-hold SPY, and a single-indicator strategy.
+## How it works
 
-Universe: 10–15 US equities, mix of large-cap stable and mid-cap volatile.
+```
+screen (recent SEC filers ∪ holdings)
+  → fundamentals + technicals + sentiment + news specialists  (parallel, typed Pydantic out)
+    → synthesize()  (deterministic, agreement-weighted confidence vote)
+      → risk layer  (inverse-vol sizing, per-name/sector/gross caps, drawdown governor)
+        → execute   (IBKR paper account, or a simulated book)
+```
 
-## Architecture
+- **Universe:** point-in-time **Nasdaq-100**, reconstructed from QQQ's SEC N-PORT filings.
+- **Data — no paid vendor:** **IBKR** (prices + Benzinga news) and **SEC EDGAR** (point-in-time
+  XBRL fundamentals + filing narrative). Prices are cached; fundamentals are filing-date anchored.
+- **Two execution modes:** a simulated `PaperBook`, or live orders on the IBKR paper account
+  (`--execute ibkr --transmit`), guarded so it refuses any non-paper account.
 
-Direct Anthropic SDK plus Pydantic plus an own orchestration layer. Each specialist's tool surface is implemented as an MCP server. Deliberately not LangGraph or LangChain — the orchestration design is part of the project's value, not an implementation detail to outsource.
+## The honest methodology bit
 
-See `ARCHITECTURE.md` for the full rationale.
+An LLM backtest is **contaminated by construction** — the model has ingested what these tickers
+did during its training window, so an in-window backtest measures memory, not edge. The only
+clean evaluation is **forward paper trading** on post-cutoff, unseen data. So parley runs a live
+weekly forward clock and treats that accruing record — not any backtest number — as the real
+verdict. See `notes/productization.md` (GATE 0) for the full reasoning.
 
-## Release roadmap
+## Layout
 
-- **Release 1 — June 12, 2026.** Two specialists (fundamentals, technicals) plus supervisor and synthesis. Full backtest over 6–12 months on 10–15 tickers. Per-specialist evals.
-- **Release 2 — July 3, 2026.** Adds news analyst and risk manager specialists. Synthesis refactored for four specialists.
-- **Release 3 — July 24, 2026.** Direction TBD at Release 2 retrospective.
-
-## Out of scope (all releases)
-
-Real money. Broker integration. Production-grade risk controls. Web UI. Options, bonds, crypto, multi-asset support. This is paper trading on cached data — that scope discipline is deliberate, not a limitation.
+- `src/agents/`, `src/supervisor.py`, `src/synthesis.py` — specialists, dispatch, synthesis
+- `src/mcp_servers/` — each specialist's tool surface as an MCP server (standalone path)
+- `src/data/` — EDGAR fundamentals, technicals, price cache, Nasdaq-100 universe, dividends
+- `src/risk.py` — the capital-preservation layer
+- `src/backtest/` — point-in-time replay, baselines, costs, metrics, walk-forward, temporal guard
+- `src/forward/` — the live clock: paper book, decision provider, IBKR adapters + execution, alerts
+- `deploy/` — Docker stack (hand-rolled IB Gateway + IBC, scheduler) — see `notes/deployment.md`
+- `evals/` — per-specialist grounding/consistency evals; `ARCHITECTURE.md` for the rationale
 
 ## Running it
 
 ```bash
 uv sync
-cp .env.example .env  # add your ANTHROPIC_API_KEY
-uv run python -m src.data.fetch_prices
-uv run python -m src.agents.single_agent
+cp .env.example .env          # ANTHROPIC_API_KEY + EDGAR_USER_AGENT (contact info)
+uv run pytest                 # the deterministic suite
+
+# one forward session (needs a running IB Gateway/TWS for live data):
+uv run python -m src.forward.run --as-of "$(date +%F)" --max-llm-usd 5
 ```
 
-Python 3.12 required. Managed via `uv`.
-
-## Contributing
-
-See `CONTRIBUTING.md`. There is a deliberate AI-free rule on skill-building components — read it before sending anything.
+Python 3.12, managed with `uv`. The always-on deployment (VPS + Docker) is in `notes/deployment.md`.
 
 ## License
 

@@ -95,11 +95,26 @@ LLM spend) and a "❌ FAILED" email — that's the silent-hole protection workin
 ## Execution mode
 
 This deployment **executes on the IBKR paper account** (`--execute ibkr --transmit`):
-each run reads the real account, sizes decisions via the risk layer, and places whole-share
-market orders that fill on the paper account (visible in the IBKR portal). `ReadOnlyApi=no`
-in the IBC config permits it; the paper-account guard (`assert_paper_ready` / `_assert_paper`)
-still refuses any non-`DU` account. The simulated `--execute sim` path remains for offline
-runs. Going to a *live* account is a further deliberate step (real money + the same flags).
+`broker_rebalance` (`src/forward/ibkr_execution.py`) reads the real account, sizes decisions
+via the same risk layer as the backtest (inverse-vol, per-name/sector/gross caps, drawdown
+governor), and places whole-share market orders that fill on the paper account (visible in
+the IBKR portal). The simulated `--execute sim` path remains for offline runs.
+
+**Safety model (this is the only code that transmits orders):**
+1. **Paper-account guard.** `assert_paper_ready` / `_assert_paper` require every managed
+   account id to start `DU` (IBKR paper) and re-check immediately before any order is sent —
+   it refuses to act against a live account. (Our account: `DUQ576452`.)
+2. **Transmit is opt-in.** `transmit=False` everywhere by default → orders are *previewed*
+   (logged), nothing sent. Real placement needs `--transmit` **and** Gateway's `ReadOnlyApi=no`.
+3. **Bounded sizing.** Market orders only (TIF=DAY); OPENs = `floor(equity × target_weight ÷
+   price)` against the *real* account equity; CLOSEs sell exactly the shares held. Sub-share
+   and over-equity orders are dropped. A successful prompt-injection is at worst one bounded,
+   risk-capped vote.
+
+The path: `account_state` (equity/cash/positions) → reconstruct a Portfolio mirroring the
+account → `build_actions` (risk layer) → `plan_orders` (whole-share BUY/SELL) →
+`execute_orders` (preview or place + await fills). Real NetLiquidation is appended to
+`broker_equity.json` each run for the drawdown governor.
 
 ## Schedule
 

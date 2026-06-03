@@ -21,7 +21,6 @@ into a single Message Batches job:
 
 Trade-off: batch jobs complete in (typically) seconds to minutes rather than inline, so
 wall-clock per wave is higher — but nothing throttles, which is the whole point at scale.
-See notes/release-2-or-3-candidates.md.
 """
 from __future__ import annotations
 

@@ -9,7 +9,7 @@
 
 ## The problem with today's setup
 
-Today `universe` is a static `list[str]` — either the 15 names in `notes/universe.md`
+Today `universe` is a static `list[str]` — either a curated ~15-name watchlist
 or `DEFAULT_TICKERS` in `src/backtest/run.py` — handed to the bot, which analyzes
 every name in it. That single list silently does **three different jobs** that should
 be separate stages:
@@ -167,7 +167,7 @@ specialist** (next major build, near-term) rather than bolted onto the screen no
 
 ## Relationship to releases
 
-- **Release 1** ships on the curated watchlist (`notes/universe.md`), explicitly
+- **Release 1** ships on the curated watchlist, explicitly
   labeled a *watchlist*, with survivorship disclosed as a known limitation.
 - **Release 2** introduces this funnel: point-in-time S&P 500 (free CSV) → screen →
   analysis. Supersedes the "single-factor baselines use the same universe" and

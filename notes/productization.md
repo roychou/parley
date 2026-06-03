@@ -2,10 +2,9 @@
 
 > Framing change (Sat 31 May 2026): parley is no longer scoped as an evaluation
 > artifact. The goal is now a tool the author would trust with **personal real
-> capital**. This document supersedes the Release-1/2/3 gating in
-> `release-2-or-3-candidates.md`: gates are now **capability- and
-> capital-preservation-based, not calendar-based**. Nothing here is financial
-> advice; trading real money carries real risk of loss.
+> capital**. This document supersedes the old Release-1/2/3 calendar gating: gates are
+> now **capability- and capital-preservation-based, not calendar-based**. Nothing here
+> is financial advice; trading real money carries real risk of loss.
 >
 > **This is an independent track** from the product in `_plans/local-notes.md`
 > (decided 31 May 2026: two separate tracks, neither subordinate). parley advances
@@ -29,12 +28,12 @@ certainly do not deploy capital) until it is met.
   event-driven screen, four baselines (SPY-hold, random, RSI, P/E-ranking),
   metrics (Sharpe, maxDD, hit rate, vs-SPY).
 - Multi-agent pipeline: fundamentals + technicals + sentiment → `synthesize()`.
-- Disciplined data layer: EDGAR (PIT fundamentals + filing narrative) with an **FMP
-  fallback for foreign filers** EDGAR can't serve, cached prices, PIT **Nasdaq-100**
-  membership (authoritative, from QQQ SEC N-PORT filings); signal/filing-keyed
-  caching; Batch API. Hardened 1 Jun: revenue-concept recency + YoY-tolerance fixes,
-  a fundamentals recency guard (abstain on stale data), and the SPY-benchmark
-  commission fix (vs-SPY/alpha-beta were silently null under realistic costs).
+- Disciplined data layer, **vendor-free (3 Jun): IBKR (prices + Benzinga news) + EDGAR
+  (PIT fundamentals + filing narrative) only — FMP fully removed** ($69/mo cancelled).
+  Foreign filers via EDGAR annual/IFRS; sectors as a committed static map; prices
+  cache-only (warmed from IBKR). PIT **Nasdaq-100** membership (QQQ SEC N-PORT);
+  signal/filing-keyed caching; Batch API. Hardened 1 Jun: revenue-concept recency +
+  YoY-tolerance fixes, a fundamentals recency guard, and the SPY-benchmark commission fix.
 - Reproducibility scaffolding: per-kind cache versioning, full decision audit log.
 - **Specialists validated (1 Jun)** via the live grounding probe: technicals and
   fundamentals both ground their reasoning in the data (3/3 each on corrected data);
@@ -52,11 +51,11 @@ certainly do not deploy capital) until it is met.
 - ~~Risk management = one stop-loss~~ — **resolved (Phase 1)**: `src/risk.py` —
   inverse-vol sizing, hard per-name cap, max-gross, drawdown governor/kill switch.
   (Sector limits + long/short still open.)
-- **Execution path: partial** — forward paper harness + IBKR price/news adapters
-  built (mock-tested); IBKR execution adapter + live validation + monitoring remain.
-  (1 Jun: the live/forward specialist path itself was found broken — the MCP servers
-  didn't load `.env`, and `EDGAR_USER_AGENT` was unset — both fixed; the forward path
-  now fetches real data, pending only a Gateway.)
+- ~~Execution path: partial~~ — **resolved (3 Jun): LIVE.** Deployed off-laptop on an
+  IONOS VPS (hand-rolled Docker: IB Gateway + IBC headless, supercronic, Doppler secrets,
+  Telegram alerts) and **executing on the IBKR paper account** (`--execute ibkr --transmit`,
+  weekly Mon 10:00 ET) — fills validated 3 Jun. Reconciliation depth + richer monitoring
+  remain (Phase 2.3/2.4). See `notes/deployment.md`.
 - ~~No LLM-production guardrails~~ — **mostly resolved (Phase 3)**: model pinning
   (3.1), bounded sizing via the risk cap (3.2), prompt-injection hardening (3.3),
   spend cap. Live-data monitoring/kill-switch (ops) remain.
@@ -220,19 +219,20 @@ persistent infra (VM + IBC + cron) only when going real-money.
 - LLM **spend cap** (`--max-llm-usd`, `src/backtest/budget.py`) — added after a
   validation run overran to ~$120; aborts at the cap, resumes from the warm cache.
 
-**Remaining to run forward:**
-1. **Operator setup** — Anthropic credits **✓ topped up**; **IBKR paper account still
-   pending approval** (the current blocker), then IB Gateway (paper) + US market-data
-   subscription (~$10/mo).
-2. **Live validation** — run a session, confirm IBKR price/news adapters return real
-   bars + headlines, reconcile sizing/execution.
-3. **Later** — IBKR **execution** adapter (place paper orders) + scheduler (cron/launchd).
+**✅ LIVE + DEPLOYED + EXECUTING (3 Jun 2026).** All "remaining" items below are done; the
+clock runs autonomously on a VPS and *places real orders on the IBKR paper account*:
+1. **Operator setup** — ✅ Anthropic credits; IBKR paper account + US market-data sub live.
+2. **Live validation** — ✅ real bars + Benzinga news confirmed; full session ran end to end.
+3. **Execution adapter + scheduler** — ✅ wired (`--execute ibkr --transmit`) and live-validated:
+   BUY 359 ROST + 312 WMT filled on DUQ576452 (3 Jun); supercronic scheduler weekly Mon 10:00 ET.
+4. **Deployment** — ✅ off the laptop on an IONOS VPS via hand-rolled Docker (IB Gateway + IBC
+   headless, no third-party image), Doppler runtime secrets, Telegram alerts + daily watchdog.
+   See `notes/deployment.md`.
 
-**Immediate next step (gated on IBKR):** the moment the paper account opens — spin up
-IB Gateway + data sub, **validate the IBKR price/news adapters live on a couple of
-tickers**, then start the weekly forward clock (news on/off ablation from day one).
-Everything upstream of the Gateway is built, fixed, and validated; the forward clock
-is the only thing that accrues a real edge verdict, so start it ASAP.
+**Immediate next step:** nothing more to *build* to reach a verdict — **let the clock run and
+accrue the forward record** (the only clean GATE-0 evaluation). Watch the first scheduled
+Monday run for the clean TIF=DAY fix, then add reconciliation/monitoring depth (Phase 2.3/2.4)
+as the record grows. Do NOT add signal/alpha work before the record speaks.
 
 ---
 
@@ -268,15 +268,21 @@ trades long BUY/SELL); long/short is a clean extension when decided.
 
 *Goal: survive contact with a real broker before real capital.*
 
-2.1 **Broker integration** — **IBKR chosen** (Singapore; Alpaca needs US residency).
-Data adapters (price + news) **built** (`src/forward/ibkr.py`, refresh/ingest, via
-`ib_async`); **execution adapter remains** — order management (partial fills, halts,
-market hours), corporate-actions handling. All pending live Gateway validation.
-2.2 **Paper trading for a meaningful period** (months). Reconcile paper fills vs.
-backtest assumptions — this is where hidden look-ahead and cost optimism surface.
-2.3 **Reconciliation** — does my modeled book match the broker's, every day?
-2.4 **Monitoring / alerting** — position, P&L, data-staleness, and error alerts;
-the kill switch wired to a human.
+2.1 **Broker integration** — ✅ **DONE (3 Jun 2026).** IBKR (Singapore). Data adapters +
+**execution adapter live**: `broker_rebalance` reads the real paper account, sizes via the
+risk layer, places whole-share market orders (`run.py --execute ibkr --transmit`).
+Live-validated: BUY 359 ROST + 312 WMT filled on DUQ576452. (Order TIF=DAY set explicitly to
+avoid IBKR warning 10349 mis-reporting fills.) Halts/partial-fills/corp-actions handling is
+still thin — revisit as they occur.
+2.2 **Paper trading for a meaningful period** (months) — ◀ **IN PROGRESS.** The clock runs
+weekly (Mon 10:00 ET) on the paper account; the forward record is now accruing. This is the
+GATE-0 evaluation — it only advances with calendar time.
+2.3 **Reconciliation** — *partial.* The broker account is the source of truth (positions read
+via `account_state` each run); real NetLiquidation persisted to `broker_equity.json`. A
+modeled-vs-broker daily diff is not yet built — add as the record grows.
+2.4 **Monitoring / alerting** — *partial.* Telegram alert per run + a daily heartbeat watchdog
+(`--healthcheck`, alerts if the clock goes quiet). Position/P&L/data-staleness detail and a
+human-wired kill switch remain.
 
 > **GATE 2:** Paper-trading performance tracks the backtest within tolerance over
 > the test period (no nasty surprises in cost or timing).
@@ -329,6 +335,24 @@ Sequenced by value, and only once the edge is validated and risk-controlled:
 - **Delisted-fundamentals wiring** (CIK map → EDGAR companyfacts) and
   **recycled-ticker disambiguation** — for a fully survivorship-free deep history.
 
+### Parked backlog (salvaged from the retired Release-2/3 list)
+
+Specific, still-live improvements — none gating, all behind GATE 0:
+- **Sector-relative fundamentals thresholds.** The specialist uses absolute cutoffs
+  (P/E<40, margin>20%, growth>15%, D/E<2) → systematic misfires on banks/REITs/utilities
+  (high D/E), low-margin retail/airlines, and mature staples (low growth). Fix: feed the
+  `sector` (we have a static map) + ideally sector-median metrics, and reason relative to
+  peers. **`evals/fundamentals/consistency.py` has the same absolute-threshold bug** and
+  must be re-calibrated in lockstep.
+- **Confidence calibration.** The confidence→size mapping is mechanical; once the forward
+  record has enough bets, make it empirical (fractional-Kelly is the post-calibration option).
+- **Bank/financials fundamentals coverage.** EDGAR extraction is revenue-concept-based, which
+  structurally can't read banks (net interest income, NIM, efficiency ratio — no clean
+  `Revenues` tag); they currently abstain. Needs bank-specific fields to include financials.
+- **Agentic retrieval for the sentiment specialist.** Replace whole-filing map-reduce with a
+  `search_filing(query)` tool so the specialist reads only the passages it wants (guidance,
+  new risk factors) — lighter than full RLM recursion, cuts tokens (cost + throughput).
+
 ---
 
 ## Cross-cutting / not to forget
@@ -367,23 +391,23 @@ Sequenced by value, and only once the edge is validated and risk-controlled:
 
 ---
 
-## Immediate next step
+## Immediate next step (updated 3 Jun 2026)
 
-Phase 0 is **done** (costs, dividends, walk-forward, run log, alpha/beta, temporal
-gate). The whole pipeline is built, the data layer is hardened, the specialists are
-validated, and clean-window backtests run end-to-end (they confirm plumbing, not
-edge — the post-cutoff window is too short and the universe rallies dominate; this
-is expected and unchanged). **The only thing left that produces a real edge verdict
-is the forward paper-trading clock, and it is blocked solely on the IBKR paper
-account opening.**
+Phase 0 done; the forward clock is **deployed and executing live** on the IBKR paper account
+from an always-on VPS (weekly Mon 10:00 ET) — see the BUILD STATUS section and
+`notes/deployment.md` / [[project-live-deployment]]. **There is no further upstream build that
+moves the edge verdict.** The clock is the answer, and it only speaks with calendar time.
 
-So there is no further upstream build that moves the needle:
-1. **When IBKR opens** — Gateway + data sub, live-validate the price/news adapters on
-   a couple of tickers, then **start the weekly forward clock** (news on/off ablation
-   from day one). This is the priority; it only accrues with calendar time.
-2. **While waiting** — optional polish only (e.g. an equal-weight-universe baseline
-   for honest backtest comparison; sector/concentration limits; IBKR execution
-   adapter). None are gating.
+So, in priority order:
+1. **Let it run; accrue the record.** Every weekly decision is post-cutoff, unseen data — the
+   only clean GATE-0 evaluation. Confirm the first scheduled Monday run is clean (the TIF=DAY
+   fix), then mostly leave it alone.
+2. **Operational hardening as needed** (Phase 2.3/2.4): modeled-vs-broker reconciliation diff,
+   richer fill/P&L/staleness monitoring, a human-wired kill switch. Add depth as the record grows.
+3. **Do NOT add signal/alpha work yet** — non-gating until the forward record shows the base
+   system has an edge worth enhancing. Parked: the deterministic quality-value baseline
+   (`notes/quality-value-baseline-design.md`) as the honest yardstick.
 
-Do not spend on more in-window backtests expecting an edge answer — they can't give
-one. The clock is the answer.
+Decisions still genuinely open (operator): live rebalance cadence vs. costs/taxes (currently
+weekly); per-name/sector risk budget review against the $1M paper base; when (if) to graduate
+to a real-money account (a deliberate, separate step gated on this record).

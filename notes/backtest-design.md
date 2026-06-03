@@ -57,7 +57,7 @@ The data layer is responsible for enforcing this. The specialists and supervisor
 
 **Cadence:** weekly. Decisions made every Friday at close, for 26 decision points over a 6-month backtest window.
 
-**Universe:** 15 tickers from `notes/universe.md`. If FMP has coverage gaps for any (e.g., ATZAF Canadian listing), substitute or drop and document.
+**Universe:** a curated ~15-ticker watchlist (since superseded by point-in-time Nasdaq-100). If FMP has coverage gaps for any (e.g., ATZAF Canadian listing), substitute or drop and document.
 
 **Backtest window:** 6 months ending 4 weeks before the present date (avoid look-ahead from any post-period information that may have been used during specialist development).
 
