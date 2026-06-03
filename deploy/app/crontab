@@ -1,10 +1,12 @@
-# supercronic crontab — times are in the container's TZ (set TZ in .env; default UTC).
-# Fields: minute hour day-of-month month day-of-week  command
+# supercronic crontab — times are in the container's TZ, set to America/New_York (compose)
+# so the schedule is US-market-relative regardless of DST. Fields: min hour dom mon dow.
 #
-# Weekly forward session: Sunday 17:00. Decide on the week's closed data, mirroring the
-# old launchd schedule. PARLEY_MAX_LLM_USD caps spend (expanded by the shell at run time).
-0 17 * * 0 cd /app && python -m src.forward.run --max-llm-usd "${PARLEY_MAX_LLM_USD:-8}" >> /app/data/forward/logs/cron.log 2>&1
+# Weekly forward session, executed on the IBKR paper account: Monday 10:00 ET (30 min after
+# the open, calmer than the auction; the market is OPEN so market orders fill). Inline LLM
+# (--no-batch) for predictable timing — batch latency could push fills late in the session.
+# PARLEY_MAX_LLM_USD caps spend (expanded by the shell at run time).
+0 10 * * 1 cd /app && python -m src.forward.run --execute ibkr --transmit --no-batch --max-llm-usd "${PARLEY_MAX_LLM_USD:-8}" >> /app/data/forward/logs/cron.log 2>&1
 
-# Daily watchdog 09:00: emails if the last weekly run is missing/errored/stale (>8 days),
-# so a silently-skipped Sunday is caught within a day instead of going unnoticed.
-0 9 * * * cd /app && python -m src.forward.run --healthcheck >> /app/data/forward/logs/healthcheck.log 2>&1
+# Daily watchdog 08:00 ET: alerts (Telegram) if the last run is missing/errored/stale
+# (>8 days), so a silently-skipped Monday is caught within a day.
+0 8 * * * cd /app && python -m src.forward.run --healthcheck >> /app/data/forward/logs/healthcheck.log 2>&1

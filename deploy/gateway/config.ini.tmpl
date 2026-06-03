@@ -15,10 +15,11 @@ TradingMode=${TRADING_MODE}
 # relays it to the compose network. Accept the inbound API connection without a popup.
 OverrideTwsApiPort=${API_PORT_INTERNAL}
 AcceptIncomingConnectionAction=accept
-# READ-ONLY: the forward clock only *reads* prices/news; the PaperBook is simulated, so
-# no orders are transmitted. Keep this 'yes'. (Going live with the execution adapter is a
-# deliberate, separate change: set ReadOnlyApi=no AND opt in to transmit — see notes.)
-ReadOnlyApi=yes
+# API write access: 'no' lets the broker-execution path place orders on the PAPER account.
+# The paper-account guard (_assert_paper / assert_paper_ready) still refuses any non-DU
+# account, and run.py only transmits with the explicit --transmit flag. (For a pure
+# data-only/simulated deployment, set this back to 'yes'.)
+ReadOnlyApi=no
 
 # ---- Headless login hardening (suppress dialogs that would block an unattended start) ----
 AcceptNonBrokerageAccountWarning=yes

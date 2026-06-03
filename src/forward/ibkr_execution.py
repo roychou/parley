@@ -144,7 +144,13 @@ async def execute_orders(
             continue
         contract = Stock(p.ticker, "SMART", "USD")
         await ib.qualifyContractsAsync(contract)
-        trade = ib.placeOrder(contract, MarketOrder(p.side, p.quantity))
+        # Set TIF explicitly to DAY. Without it, IBKR's order preset overrides the (empty)
+        # TIF and emits warning 10349, which ib_async surfaces as a transient 'Cancelled'
+        # status — the order still fills, but it confuses fill monitoring. An explicit DAY
+        # matches the preset, so there's nothing to override and no spurious cancel.
+        order = MarketOrder(p.side, p.quantity)
+        order.tif = "DAY"
+        trade = ib.placeOrder(contract, order)
         try:
             await _await_done(trade, fill_timeout)
         except TimeoutError:

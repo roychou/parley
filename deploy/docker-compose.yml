@@ -26,7 +26,7 @@ services:
       DOPPLER_TOKEN: ${DOPPLER_TOKEN:?set DOPPLER_TOKEN in deploy/.env}
       TRADING_MODE: paper          # the image refuses anything but paper
       API_PORT_RELAY: "4004"
-      TZ: ${TZ:-Asia/Singapore}
+      TZ: ${TZ:-America/New_York}
     expose:
       - "4004"                     # internal network only — never add a host `ports:` map
     volumes:
@@ -42,7 +42,7 @@ services:
       DOPPLER_TOKEN: ${DOPPLER_TOKEN:?set DOPPLER_TOKEN in deploy/.env}
       IBKR_HOST: gateway           # resolves to the gateway service on the compose network
       IBKR_PORT: "4004"            # the socat relay port
-      TZ: ${TZ:-Asia/Singapore}
+      TZ: ${TZ:-America/New_York}
     volumes:
       - forward:/app/data/forward  # the GATE-0 track record — back this volume up
       - cache:/app/data/cache      # self-warming price / EDGAR / signal caches

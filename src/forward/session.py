@@ -35,6 +35,32 @@ def _window_start(as_of: str, lookback_days: int) -> str:
     return (date(y, m, d) - timedelta(days=lookback_days)).isoformat()
 
 
+async def produce_decisions(
+    candidates: list[str], as_of: str, decision_provider: DecisionProvider,
+) -> tuple[list[Decision], list[str]]:
+    """Run the decision provider over each candidate; return (decisions, skipped).
+
+    A fatal error (billing/auth/budget cap) propagates — never masked. A per-ticker
+    data error (or a None decision) just skips that name. Shared by the simulated and
+    broker-execution paths so both decide identically and only differ in execution.
+    """
+    decisions: list[Decision] = []
+    skipped: list[str] = []
+    for ticker in candidates:
+        try:
+            decision = await decision_provider(ticker, as_of)
+        except Exception as e:
+            if _is_fatal_error(e):  # billing/auth/budget cap — abort, don't mask
+                raise
+            logger.warning(f"skipping {ticker}: {type(e).__name__}: {e}")
+            decision = None
+        if decision is not None:
+            decisions.append(decision)
+        else:
+            skipped.append(ticker)
+    return decisions, skipped
+
+
 async def run_forward_session(
     book: PaperBook,
     as_of: str,
@@ -68,20 +94,7 @@ async def run_forward_session(
         else:
             candidates = sorted(set(eligible_universe) | set(held))
 
-    decisions: list[Decision] = []
-    skipped: list[str] = []  # candidates the provider couldn't decide (missing data)
-    for ticker in candidates:
-        try:
-            decision = await decision_provider(ticker, as_of)
-        except Exception as e:
-            if _is_fatal_error(e):  # billing/auth/budget cap — abort, don't mask
-                raise
-            logger.warning(f"skipping {ticker}: {type(e).__name__}: {e}")
-            decision = None
-        if decision is not None:
-            decisions.append(decision)
-        else:
-            skipped.append(ticker)
+    decisions, skipped = await produce_decisions(candidates, as_of, decision_provider)
 
     # Prices for MTM + execution: everything held or freshly decided. Drop names with
     # no current price (can't mark or trade them this session).

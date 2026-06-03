@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 from datetime import date, timedelta
 from functools import partial
@@ -47,6 +48,7 @@ from src.forward.ibkr import (
     news_source_from_store,
     refresh_price_cache,
 )
+from src.forward.ibkr_execution import account_state, broker_rebalance
 from src.forward.notify import (
     heartbeat_stale,
     notify,
@@ -55,7 +57,7 @@ from src.forward.notify import (
 )
 from src.forward.paper import DEFAULT_BOOK_PATH, PaperBook
 from src.forward.report import session_digest, write_digest
-from src.forward.session import run_forward_session
+from src.forward.session import produce_decisions, run_forward_session
 from src.risk import RiskConfig, annualized_volatility
 
 load_dotenv()
@@ -65,6 +67,9 @@ logger = logging.getLogger(__name__)
 SCREEN_LOOKBACK_DAYS = 7  # trailing window for the filing-event screen
 SIGNAL_CACHE_DIR = Path("data/cache/signals")
 SUMMARY_CACHE_DIR = Path("data/cache/filing_summaries")
+# Equity history for the broker path's drawdown governor (real NetLiquidation per run).
+# The sim path uses the PaperBook's curve; the broker account is the source of truth here.
+BROKER_EQUITY_PATH = Path("data/forward/broker_equity.json")
 
 
 # ==========================================
@@ -105,6 +110,48 @@ def dividends_since(tickers: list[str], last_run_date: str | None, as_of: str) -
 def _prev_day(d: str) -> str:
     y, m, day = (int(x) for x in d.split("-"))
     return (date(y, m, day) - timedelta(days=1)).isoformat()
+
+
+def _build_provider(period, news_source, include_news, use_batch, max_llm_usd):
+    """Build the budget-capped, optionally-batched decision provider (fundamentals +
+    technicals + sentiment + news). Shared by the simulated and broker sessions so both
+    decide identically — they differ only in how the resulting decisions are executed."""
+    client = AsyncAnthropic()
+    mc = BatchLLM(client) if use_batch else client.messages
+    if max_llm_usd is not None:
+        meter = BudgetMeter(max_llm_usd, batch_discount=0.5 if use_batch else 1.0)
+        mc = BudgetedMessages(mc, meter)
+    return partial(
+        run_forward_decision, mc,
+        fundamentals_loader=partial(get_fundamentals_as_of, price_period=period),
+        technicals_loader=partial(get_technicals_as_of, price_period=period),
+        news_source=news_source,
+        include_news=include_news,
+        signal_cache=SignalCache(SIGNAL_CACHE_DIR),
+        summary_cache=FilingSummaryCache(SUMMARY_CACHE_DIR),
+        scaffold_config=ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None,
+    )
+
+
+def _load_equity_curve(path: Path = BROKER_EQUITY_PATH) -> list[dict]:
+    """Persisted real-account equity history (for the broker drawdown governor)."""
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001 — a corrupt log shouldn't abort a run
+        logger.warning(f"equity curve read failed: {e}")
+        return []
+
+
+def _append_equity(as_of: str, equity: float, cash: float,
+                   path: Path = BROKER_EQUITY_PATH) -> None:
+    """Append this run's real NetLiquidation to the equity history."""
+    curve = _load_equity_curve(path)
+    curve.append({"date": as_of, "cash": cash,
+                  "positions_value": equity - cash, "total_value": equity})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(curve, indent=2), encoding="utf-8")
 
 
 # ==========================================
@@ -154,24 +201,7 @@ async def run_forward_paper_session(
             ib.disconnect()
 
     news_source = news_source_from_store(news_store if include_news else {})
-
-    client = AsyncAnthropic()
-    base_mc = BatchLLM(client) if use_batch else client.messages
-    mc = base_mc
-    if max_llm_usd is not None:
-        meter = BudgetMeter(max_llm_usd, batch_discount=0.5 if use_batch else 1.0)
-        mc = BudgetedMessages(base_mc, meter)
-
-    provider = partial(
-        run_forward_decision, mc,
-        fundamentals_loader=partial(get_fundamentals_as_of, price_period=period),
-        technicals_loader=partial(get_technicals_as_of, price_period=period),
-        news_source=news_source,
-        include_news=include_news,
-        signal_cache=SignalCache(SIGNAL_CACHE_DIR),
-        summary_cache=FilingSummaryCache(SUMMARY_CACHE_DIR),
-        scaffold_config=ScaffoldConfig(max_concurrent_chunks=10_000) if use_batch else None,
-    )
+    provider = _build_provider(period, news_source, include_news, use_batch, max_llm_usd)
 
     risk_config = RiskConfig() if use_risk else None
     summary = await run_forward_session(
@@ -192,12 +222,100 @@ async def run_forward_paper_session(
     return summary
 
 
-def _summary_line(summary: dict) -> str:
-    """A compact one-line status for the alert email / heartbeat note."""
+def _broker_digest(as_of: str, result: dict, decided: int, candidates: int,
+                   skipped: int, counts: dict) -> str:
+    """Terse digest for a broker session (no PaperBook — the account is the truth)."""
+    head = (f"# Forward BROKER session — {as_of}\n\n"
+            f"- account {result['account']} | equity ${result['equity']:,.2f} | "
+            f"transmit={result['transmit']}\n"
+            f"- screened {candidates} → decided {decided}, skipped {skipped}\n"
+            f"- directions: {counts}\n\n## Orders\n")
+    plans = result.get("plans") or []
+    body = "\n".join(f"- {side} {qty} {tk}" for side, qty, tk in plans) or "- none"
+    return head + body + "\n"
+
+
+async def run_forward_broker_session(
+    tickers: list[str],
+    as_of: str,
+    *,
+    transmit: bool = False,
+    include_news: bool = True,
+    use_batch: bool = True,
+    use_risk: bool = True,
+    max_llm_usd: float | None = None,
+    cost_model: CostModel | None = None,
+) -> dict:
+    """One forward session that executes against the IBKR **paper** account instead of
+    the simulated book. Reads real positions/equity, screens (universe filers ∪ held in
+    the account), decides with the same pipeline, then sizes + places whole-share orders
+    via the risk layer. transmit=False previews (logs orders, places nothing); transmit=
+    True requires Gateway's Read-Only API OFF. The paper-account guard is always enforced."""
+    period = FORWARD_PRICE_PERIOD
+    ib = await connect()
     try:
-        return (f"as_of {summary['as_of']} | decided {summary['decided']}/"
-                f"{summary['candidates']} | open {summary['open_positions']} | "
-                f"equity ${summary['equity']:,.0f} | {summary['directions']}")
+        acct = assert_paper_ready(ib)          # refuses anything but a paper account
+        state = account_state(ib)
+        held = list(state.positions)
+        window_start = (date.fromisoformat(as_of)
+                        - timedelta(days=SCREEN_LOOKBACK_DAYS)).isoformat()
+        candidates = select_candidates(tickers, held, window_start, as_of, recent_filing_dates)
+        logger.info(f"broker screen: {len(candidates)} candidates ({len(tickers)} universe "
+                    f"+ {len(held)} held in {acct}); transmit={transmit}")
+
+        await refresh_price_cache(ib, candidates, period=period)
+        news_store = await fetch_news_for(ib, candidates, as_of) if include_news else {}
+        news_source = news_source_from_store(news_store)
+        provider = _build_provider(period, news_source, include_news, use_batch, max_llm_usd)
+
+        decisions, skipped = await produce_decisions(candidates, as_of, provider)
+
+        price_fn = current_price_from_cache(period)
+        wanted = {d.ticker for d in decisions} | set(held)
+        prices = {t: price_fn(t) for t in wanted}
+        prices = {t: p for t, p in prices.items() if p is not None}
+
+        risk_config = RiskConfig() if use_risk else None
+        vols = None
+        if risk_config is not None:
+            vfn = volatility_from_cache(period, as_of, RiskConfig().vol_lookback)
+            vols = {d.ticker: vfn(d.ticker) for d in decisions if d.direction == "BUY"}
+
+        result = await broker_rebalance(
+            ib, decisions, prices,
+            vols=vols, risk_config=risk_config, equity_curve=_load_equity_curve(),
+            cost_model=cost_model or CostModel.ibkr_singapore_fixed(), transmit=transmit,
+        )
+    finally:
+        ib.disconnect()
+
+    _append_equity(as_of, result["equity"], state.cash)
+    counts: dict[str, int] = {}
+    for d in decisions:
+        counts[d.direction] = counts.get(d.direction, 0) + 1
+    summary = {
+        "as_of": as_of, "account": result["account"], "equity": result["equity"],
+        "transmit": result["transmit"], "candidates": len(candidates),
+        "decided": len(decisions), "skipped": skipped, "directions": counts,
+        "plans": result["plans"], "results": result["results"],
+    }
+    digest = _broker_digest(as_of, result, len(decisions), len(candidates), len(skipped), counts)
+    logger.info("broker session %s -> %s\n%s", as_of, write_digest(as_of, digest), digest)
+    return summary
+
+
+def _summary_line(summary: dict) -> str:
+    """A compact one-line status for the alert / heartbeat note (sim or broker)."""
+    try:
+        base = (f"as_of {summary['as_of']} | decided {summary.get('decided')}/"
+                f"{summary.get('candidates')} | equity ${summary.get('equity', 0):,.0f} "
+                f"| {summary.get('directions')}")
+        if "transmit" in summary:  # broker session
+            n_orders = len(summary.get("plans", []))
+            return base + f" | transmit={summary['transmit']} | orders={n_orders}"
+        if "open_positions" in summary:  # sim session
+            return base + f" | open {summary['open_positions']}"
+        return base
     except Exception:  # noqa: BLE001 — never let formatting break the wrap-up
         return str(summary)[:300]
 
@@ -231,7 +349,13 @@ def main() -> None:
     parser.add_argument("--max-llm-usd", type=float, default=None,
                         help="Hard LLM spend cap for the session.")
     parser.add_argument("--no-refresh", action="store_true",
-                        help="Skip the IBKR pull (use the warm cache).")
+                        help="Skip the IBKR pull (use the warm cache). Sim execution only.")
+    parser.add_argument("--execute", choices=["sim", "ibkr"], default="sim",
+                        help="sim = simulated PaperBook (default); ibkr = place orders on "
+                             "the IBKR paper account.")
+    parser.add_argument("--transmit", action="store_true",
+                        help="ibkr only: actually send orders (needs Gateway Read-Only API "
+                             "OFF). Without it, orders are previewed (logged), never sent.")
     parser.add_argument("--healthcheck", action="store_true",
                         help="Watchdog mode: email if the last run is stale/errored, then exit.")
     parser.add_argument("--heartbeat-max-hours", type=float, default=24 * 8,
@@ -243,16 +367,24 @@ def main() -> None:
         return
 
     tickers = args.tickers or nasdaq100_as_of(args.as_of)
-    logger.info(f"forward session as_of={args.as_of} | {len(tickers)} "
-                f"tickers | news={not args.no_news} risk={not args.no_risk} "
-                f"batch={not args.no_batch}")
+    logger.info(f"forward session as_of={args.as_of} | execute={args.execute}"
+                f"{' transmit' if args.transmit else ''} | {len(tickers)} tickers | "
+                f"news={not args.no_news} risk={not args.no_risk} batch={not args.no_batch}")
     try:
-        summary = asyncio.run(run_forward_paper_session(
-            tickers, args.as_of,
-            include_news=not args.no_news, use_risk=not args.no_risk, use_batch=not args.no_batch,
-            max_llm_usd=args.max_llm_usd, refresh=not args.no_refresh,
-            book_path=Path(args.book) if args.book else DEFAULT_BOOK_PATH,
-        ))
+        if args.execute == "ibkr":
+            summary = asyncio.run(run_forward_broker_session(
+                tickers, args.as_of, transmit=args.transmit,
+                include_news=not args.no_news, use_risk=not args.no_risk,
+                use_batch=not args.no_batch, max_llm_usd=args.max_llm_usd,
+            ))
+        else:
+            summary = asyncio.run(run_forward_paper_session(
+                tickers, args.as_of,
+                include_news=not args.no_news, use_risk=not args.no_risk,
+                use_batch=not args.no_batch, max_llm_usd=args.max_llm_usd,
+                refresh=not args.no_refresh,
+                book_path=Path(args.book) if args.book else DEFAULT_BOOK_PATH,
+            ))
     except Exception as e:  # noqa: BLE001 — record + alert, then re-raise for a non-zero exit
         body = f"{type(e).__name__}: {e}"
         logger.exception("forward session failed")

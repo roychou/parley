@@ -92,12 +92,25 @@ docker compose run --rm app python -m src.forward.run --healthcheck
 If the test run can't reach the Gateway you'll see the preflight fail fast (before any
 LLM spend) and a "❌ FAILED" email — that's the silent-hole protection working.
 
+## Execution mode
+
+This deployment **executes on the IBKR paper account** (`--execute ibkr --transmit`):
+each run reads the real account, sizes decisions via the risk layer, and places whole-share
+market orders that fill on the paper account (visible in the IBKR portal). `ReadOnlyApi=no`
+in the IBC config permits it; the paper-account guard (`assert_paper_ready` / `_assert_paper`)
+still refuses any non-`DU` account. The simulated `--execute sim` path remains for offline
+runs. Going to a *live* account is a further deliberate step (real money + the same flags).
+
 ## Schedule
 
-`deploy/app/crontab` (supercronic), times in `$TZ`:
-- **Sun 17:00** — the weekly session, spend-capped by `PARLEY_MAX_LLM_USD`.
-- **Daily 09:00** — `--healthcheck`: emails if the last run is missing/errored/older than
-  8 days, so a skipped Sunday is caught within a day.
+`deploy/app/crontab` (supercronic), **TZ = America/New_York** so the schedule is
+US-market-relative across DST:
+- **Mon 10:00 ET** — the weekly session, executed on the paper account (30 min after the
+  open so market orders fill on real liquidity), spend-capped by `PARLEY_MAX_LLM_USD`.
+  Inline LLM (`--no-batch`) for predictable timing. (US Monday holidays are an edge — the
+  market's closed and orders won't fill; re-run by hand that week if it matters.)
+- **Daily 08:00 ET** — `--healthcheck`: Telegram alert if the last run is missing/errored/
+  older than 8 days, so a skipped Monday is caught within a day.
 
 ## State & backups
 
@@ -125,10 +138,10 @@ docker compose restart gateway             # after changing IBKR/Gateway setting
 docker compose build && docker compose up -d   # redeploy after a code/version change
 ```
 
-## Going live later (deliberate, separate)
+## Going to a live (real-money) account (deliberate, separate)
 
-The Gateway runs **ReadOnlyApi=yes** and the PaperBook is simulated, so nothing transmits.
-Real orders are a separate decision: set `ReadOnlyApi=no` in the IBC config, wire
-`broker_rebalance(..., transmit=True)` per [execution.md](execution.md), and only after
-the forward record clears GATE 0. The paper-account guard (`assert_paper_ready` /
-`_assert_paper`) stays in force regardless.
+Today this trades the **paper** account. A real account is a further deliberate step — and
+only after the forward record clears GATE 0. It would mean pointing `TWS_USERID/PASSWORD`
+at the live login and relaxing the `DU`-prefix guard, both of which should be done
+consciously, with the risk layer and spend caps verified. Until then the guard hard-refuses
+any non-paper account.
