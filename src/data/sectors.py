@@ -1,49 +1,124 @@
 """
-Ticker -> sector, from FMP company profiles, for the risk layer's concentration cap.
+Ticker -> sector for the risk layer's per-sector concentration cap.
 
-Sectors change rarely, so the map is cached on disk (data/reference/sectors.json) and
-memoized in-process. A miss fetches the FMP profile once; a failure returns None and
-the name is simply left out of sector capping rather than blocking sizing.
+A committed reference map for the eligible universe — sectors are stable facts (like
+index membership), so they live here as data, with no live API dependency. A ticker
+not in the map (e.g. a brand-new constituent) returns None and is simply exempt from
+the sector cap until added; refresh when the index reconstitutes (annually). Seeded
+from company-profile sector classifications.
 """
 from __future__ import annotations
 
-import json
-import logging
-from pathlib import Path
-
-logger = logging.getLogger(__name__)
-
-_CACHE_PATH = Path("data/reference/sectors.json")
-_cache: dict[str, str] | None = None
-
-
-def _load() -> dict[str, str]:
-    global _cache
-    if _cache is None:
-        _cache = json.loads(_CACHE_PATH.read_text()) if _CACHE_PATH.exists() else {}
-    return _cache
+# GICS-style sector per ticker. Extend when the universe changes.
+_SECTORS: dict[str, str] = {
+    "AAPL": "Technology",
+    "ABNB": "Consumer Cyclical",
+    "ADBE": "Technology",
+    "ADI": "Technology",
+    "ADP": "Industrials",
+    "ADSK": "Technology",
+    "AEP": "Utilities",
+    "ALNY": "Healthcare",
+    "AMAT": "Technology",
+    "AMD": "Technology",
+    "AMGN": "Healthcare",
+    "AMZN": "Consumer Cyclical",
+    "APP": "Technology",
+    "ARM": "Technology",
+    "ASML": "Technology",
+    "AVGO": "Technology",
+    "AXON": "Industrials",
+    "BKNG": "Consumer Cyclical",
+    "BKR": "Energy",
+    "CALM": "Consumer Defensive",
+    "CCEP": "Consumer Defensive",
+    "CDNS": "Technology",
+    "CEG": "Utilities",
+    "CHTR": "Communication Services",
+    "CMCSA": "Communication Services",
+    "COST": "Consumer Defensive",
+    "CPRT": "Industrials",
+    "CRWD": "Technology",
+    "CSCO": "Technology",
+    "CSGP": "Real Estate",
+    "CSX": "Industrials",
+    "CTAS": "Industrials",
+    "CTSH": "Technology",
+    "DASH": "Communication Services",
+    "DDOG": "Technology",
+    "DXCM": "Healthcare",
+    "EA": "Communication Services",
+    "EXC": "Utilities",
+    "FANG": "Energy",
+    "FAST": "Industrials",
+    "FER": "Industrials",
+    "FTNT": "Technology",
+    "GEHC": "Healthcare",
+    "GILD": "Healthcare",
+    "GOOG": "Communication Services",
+    "GOOGL": "Communication Services",
+    "HON": "Industrials",
+    "IDXX": "Healthcare",
+    "INSM": "Healthcare",
+    "INTC": "Technology",
+    "INTU": "Technology",
+    "ISRG": "Healthcare",
+    "KDP": "Consumer Defensive",
+    "KHC": "Consumer Defensive",
+    "KLAC": "Technology",
+    "LIN": "Basic Materials",
+    "LRCX": "Technology",
+    "MAR": "Consumer Cyclical",
+    "MCHP": "Technology",
+    "MDLZ": "Consumer Defensive",
+    "MELI": "Consumer Cyclical",
+    "META": "Communication Services",
+    "MNST": "Consumer Defensive",
+    "MPWR": "Technology",
+    "MRVL": "Technology",
+    "MSFT": "Technology",
+    "MSTR": "Technology",
+    "MU": "Technology",
+    "NFLX": "Communication Services",
+    "NVDA": "Technology",
+    "NXPI": "Technology",
+    "ODFL": "Industrials",
+    "ORLY": "Consumer Cyclical",
+    "PANW": "Technology",
+    "PAYX": "Industrials",
+    "PCAR": "Industrials",
+    "PDD": "Consumer Cyclical",
+    "PEP": "Consumer Defensive",
+    "PLTR": "Technology",
+    "PYPL": "Financial Services",
+    "QCOM": "Technology",
+    "REGN": "Healthcare",
+    "ROP": "Technology",
+    "ROST": "Consumer Cyclical",
+    "SBUX": "Consumer Cyclical",
+    "SHOP": "Technology",
+    "SNPS": "Technology",
+    "STX": "Technology",
+    "TEAM": "Technology",
+    "TMUS": "Communication Services",
+    "TRI": "Industrials",
+    "TSLA": "Consumer Cyclical",
+    "TTWO": "Communication Services",
+    "TXN": "Technology",
+    "VRSK": "Technology",
+    "VRTX": "Healthcare",
+    "WBD": "Communication Services",
+    "WDAY": "Technology",
+    "WDC": "Technology",
+    "WMT": "Consumer Defensive",
+    "XEL": "Utilities",
+    "ZS": "Technology",
+}
 
 
 def sector_of(ticker: str) -> str | None:
-    """The ticker's sector (FMP profile), cached. None if unknown or the fetch fails —
-    the name is then exempt from sector capping rather than blocking the run."""
-    cache = _load()
-    if ticker in cache:
-        return cache[ticker] or None
-
-    from src.data import fmp_client
-    try:
-        data = fmp_client._get("profile", {"symbol": ticker})
-    except fmp_client.FMPError as e:
-        logger.warning(f"sector lookup failed for {ticker}: {e}")
-        return None  # transient — don't cache, retry next time
-
-    row = data[0] if isinstance(data, list) and data else {}
-    sec = row.get("sector") or ""
-    cache[ticker] = sec  # cache even an empty result to avoid refetching unknowns
-    _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_PATH.write_text(json.dumps(cache, indent=2, sort_keys=True))
-    return sec or None
+    """The ticker's sector, or None if unmapped (then exempt from the sector cap)."""
+    return _SECTORS.get(ticker) or None
 
 
 def sector_map(tickers) -> dict[str, str]:
