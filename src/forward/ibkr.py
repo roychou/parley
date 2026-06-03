@@ -42,14 +42,46 @@ DEFAULT_CLIENT_ID = int(os.getenv("IBKR_CLIENT_ID", "17"))
 FORWARD_PRICE_PERIOD = "ibkr"
 
 
+PAPER_ACCT_PREFIX = "DU"  # IBKR paper accounts; live individual accounts start 'U'
+
+
+class GatewayNotReadyError(RuntimeError):
+    """Gateway is reachable but not in a usable paper-trading state (no managed
+    account, or a non-paper account is connected)."""
+
+
 async def connect(
     host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, client_id: int = DEFAULT_CLIENT_ID
 ) -> IB:
-    """Connect to a running IB Gateway/TWS. Caller disconnects (ib.disconnect())."""
+    """Connect to a running IB Gateway/TWS. Caller disconnects (ib.disconnect()).
+
+    A connection failure (Gateway down / not logged in) surfaces as ib_async's
+    connect error — that's the first half of preflight; `assert_paper_ready` is the
+    second (the account is present and is a paper account)."""
     ib = IB()
     await ib.connectAsync(host, port, clientId=client_id)
     logger.info(f"connected to IBKR at {host}:{port} (clientId={client_id})")
     return ib
+
+
+def assert_paper_ready(ib: IB) -> str:
+    """Preflight: confirm the connected Gateway exposes a paper account, so we fail
+    fast (before spending any LLM budget) if it's logged out, half-initialized, or —
+    critically — pointed at a *live* account. Returns the account id."""
+    accts = [a for a in ib.managedAccounts() if a]
+    if not accts:
+        raise GatewayNotReadyError(
+            "Gateway connected but reports no managed account "
+            "(still logging in, or IBC session not ready)"
+        )
+    for a in accts:
+        if not a.startswith(PAPER_ACCT_PREFIX):
+            raise GatewayNotReadyError(
+                f"refusing to run: account {a!r} is not a paper account "
+                f"(paper ids start {PAPER_ACCT_PREFIX!r})"
+            )
+    logger.info(f"preflight OK: paper account {accts[0]} ready")
+    return accts[0]
 
 
 # ==========================================

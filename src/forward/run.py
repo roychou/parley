@@ -41,10 +41,17 @@ from src.data.universe import nasdaq100_as_of
 from src.forward.decide import run_forward_decision
 from src.forward.ibkr import (
     FORWARD_PRICE_PERIOD,
+    assert_paper_ready,
     connect,
     fetch_news_for,
     news_source_from_store,
     refresh_price_cache,
+)
+from src.forward.notify import (
+    heartbeat_stale,
+    read_heartbeat,
+    send_email,
+    write_heartbeat,
 )
 from src.forward.paper import DEFAULT_BOOK_PATH, PaperBook
 from src.forward.report import session_digest, write_digest
@@ -139,6 +146,7 @@ async def run_forward_paper_session(
     if refresh:
         ib = await connect()
         try:
+            assert_paper_ready(ib)  # preflight: fail fast before any LLM spend
             await refresh_price_cache(ib, candidates, period=period)
             if include_news:
                 news_store = await fetch_news_for(ib, candidates, as_of)
@@ -184,6 +192,29 @@ async def run_forward_paper_session(
     return summary
 
 
+def _summary_line(summary: dict) -> str:
+    """A compact one-line status for the alert email / heartbeat note."""
+    try:
+        return (f"as_of {summary['as_of']} | decided {summary['decided']}/"
+                f"{summary['candidates']} | open {summary['open_positions']} | "
+                f"equity ${summary['equity']:,.0f} | {summary['directions']}")
+    except Exception:  # noqa: BLE001 — never let formatting break the wrap-up
+        return str(summary)[:300]
+
+
+def _run_healthcheck(max_age_hours: float) -> None:
+    """Standalone watchdog (for a separate, more frequent cron): emails if the clock
+    has gone quiet — no heartbeat, last run errored, or older than max_age_hours.
+    Exits non-zero when stale so the scheduler also records it."""
+    hb = read_heartbeat()
+    if heartbeat_stale(hb, max_age_hours):
+        body = f"forward clock looks stale (>{max_age_hours}h or errored). Last: {hb}"
+        logger.warning(body)
+        send_email("⚠️ parley forward clock is quiet", body)
+        raise SystemExit(1)
+    logger.info(f"heartbeat OK: {hb}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one weekly forward paper-trading session.")
     parser.add_argument("--tickers", nargs="+", default=None,
@@ -201,18 +232,37 @@ def main() -> None:
                         help="Hard LLM spend cap for the session.")
     parser.add_argument("--no-refresh", action="store_true",
                         help="Skip the IBKR pull (use the warm cache).")
+    parser.add_argument("--healthcheck", action="store_true",
+                        help="Watchdog mode: email if the last run is stale/errored, then exit.")
+    parser.add_argument("--heartbeat-max-hours", type=float, default=24 * 8,
+                        help="Healthcheck staleness threshold in hours (default 8 days).")
     args = parser.parse_args()
+
+    if args.healthcheck:
+        _run_healthcheck(args.heartbeat_max_hours)
+        return
 
     tickers = args.tickers or nasdaq100_as_of(args.as_of)
     logger.info(f"forward session as_of={args.as_of} | {len(tickers)} "
                 f"tickers | news={not args.no_news} risk={not args.no_risk} "
                 f"batch={not args.no_batch}")
-    summary = asyncio.run(run_forward_paper_session(
-        tickers, args.as_of,
-        include_news=not args.no_news, use_risk=not args.no_risk, use_batch=not args.no_batch,
-        max_llm_usd=args.max_llm_usd, refresh=not args.no_refresh,
-        book_path=Path(args.book) if args.book else DEFAULT_BOOK_PATH,
-    ))
+    try:
+        summary = asyncio.run(run_forward_paper_session(
+            tickers, args.as_of,
+            include_news=not args.no_news, use_risk=not args.no_risk, use_batch=not args.no_batch,
+            max_llm_usd=args.max_llm_usd, refresh=not args.no_refresh,
+            book_path=Path(args.book) if args.book else DEFAULT_BOOK_PATH,
+        ))
+    except Exception as e:  # noqa: BLE001 — record + alert, then re-raise for a non-zero exit
+        body = f"{type(e).__name__}: {e}"
+        logger.exception("forward session failed")
+        write_heartbeat("error", args.as_of, body)
+        send_email(f"❌ parley forward FAILED ({args.as_of})", body)
+        raise
+
+    note = _summary_line(summary)
+    write_heartbeat("ok", args.as_of, note)
+    send_email(f"✅ parley forward OK ({args.as_of})", note)
     print(summary)
 
 
