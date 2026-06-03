@@ -36,19 +36,41 @@ Treat a Gateway/IBC version bump as a deploy, like a model-ID bump.
 
 ## Prerequisites
 
-- A small always-on Linux host with Docker + Docker Compose v2 (a $5–10/mo VPS is plenty;
-  the job runs minutes/week). Pick a region with decent latency to IBKR.
+- A small always-on Linux host (amd64) with Docker + Docker Compose v2 (a $5–10/mo VPS is
+  plenty; the job runs minutes/week). Region/latency is irrelevant at weekly cadence.
 - IBKR **paper** account credentials + a US **market-data subscription** (~$10/mo) on it,
   or price bars come back empty.
 - An SMTP sender for alerts (Gmail/Fastmail app password is simplest; Proton needs Bridge).
+- A **Doppler** account (free tier) — secrets live there, not in a file. See below.
+
+## Secrets — Doppler (runtime injection, nothing real on disk)
+
+Every secret lives in Doppler and is fetched at container start by `doppler run` (wrapped
+into both entrypoints); only a scoped, read-only **service token** sits on the VPS. Honest
+caveats: that token can itself fetch everything (the irreducible bootstrap secret — the win
+is central rotation/audit/instant revocation), and it adds a runtime dependency on Doppler's
+API (mitigated by the CLI's auto encrypted-fallback cache). Infisical works the same way if
+you swap the CLI install + `infisical run`.
+
+1. In Doppler: create project **parley**, config **prd**, and add these secrets:
+   `TWS_USERID`, `TWS_PASSWORD`, `ANTHROPIC_API_KEY`, `EDGAR_USER_AGENT`,
+   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `ALERT_EMAIL_TO`,
+   `PARLEY_MAX_LLM_USD`. (Non-secret wiring — `IBKR_HOST/PORT`, `TRADING_MODE`, `TZ` — stays
+   in compose, not Doppler.)
+2. Create a **read-only service token** scoped to `parley/prd`.
+3. On the VPS, put just that token in `deploy/.env` and lock it down:
+   ```sh
+   cp .env.example .env
+   echo 'DOPPLER_TOKEN=dp.st.prd.xxxxx' > .env   # the real token
+   chmod 600 .env
+   ```
 
 ## Setup
 
 ```sh
-# on the host
-git clone <your repo> parley && cd parley/deploy
-cp .env.example .env && $EDITOR .env      # IBKR paper creds, Anthropic key, SMTP, TZ
-docker compose build                       # first build pulls Gateway + IBC + deps
+# on the host (code already present)
+cd parley/deploy
+docker compose build                       # first build pulls Gateway + IBC + Doppler + deps
 docker compose up -d
 docker compose logs -f gateway             # watch IBC log in; wait for the API to come up
 ```

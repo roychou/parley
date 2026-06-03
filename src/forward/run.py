@@ -49,8 +49,8 @@ from src.forward.ibkr import (
 )
 from src.forward.notify import (
     heartbeat_stale,
+    notify,
     read_heartbeat,
-    send_email,
     write_heartbeat,
 )
 from src.forward.paper import DEFAULT_BOOK_PATH, PaperBook
@@ -210,7 +210,7 @@ def _run_healthcheck(max_age_hours: float) -> None:
     if heartbeat_stale(hb, max_age_hours):
         body = f"forward clock looks stale (>{max_age_hours}h or errored). Last: {hb}"
         logger.warning(body)
-        send_email("⚠️ parley forward clock is quiet", body)
+        notify("⚠️ parley forward clock is quiet", body)
         raise SystemExit(1)
     logger.info(f"heartbeat OK: {hb}")
 
@@ -257,12 +257,12 @@ def main() -> None:
         body = f"{type(e).__name__}: {e}"
         logger.exception("forward session failed")
         write_heartbeat("error", args.as_of, body)
-        send_email(f"❌ parley forward FAILED ({args.as_of})", body)
+        notify(f"❌ parley forward FAILED ({args.as_of})", body)
         raise
 
     note = _summary_line(summary)
     write_heartbeat("ok", args.as_of, note)
-    send_email(f"✅ parley forward OK ({args.as_of})", note)
+    notify(f"✅ parley forward OK ({args.as_of})", note)
     print(summary)
 
 

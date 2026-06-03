@@ -95,6 +95,68 @@ def test_send_email_swallows_smtp_errors(monkeypatch):
     assert notify.send_email("s", "b") is False
 
 
+# ---- telegram + dispatch --------------------------------------------------
+
+_TG_ENV = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+
+
+def _clear_all(monkeypatch):
+    for k in _SMTP_ENV + _TG_ENV:
+        monkeypatch.delenv(k, raising=False)
+
+
+class _Resp:
+    def __init__(self, status_code, text=""):
+        self.status_code = status_code
+        self.text = text
+
+
+def test_send_telegram_noop_when_unconfigured(monkeypatch):
+    _clear_all(monkeypatch)
+    assert notify.send_telegram("hi") is False
+
+
+def test_send_telegram_posts_to_bot_api(monkeypatch):
+    _clear_all(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    captured = {}
+
+    def fake_post(url, json=None, timeout=0):
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp(200)
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    assert notify.send_telegram("hello") is True
+    assert captured["url"] == "https://api.telegram.org/bot123:ABC/sendMessage"
+    assert captured["json"]["chat_id"] == "42" and captured["json"]["text"] == "hello"
+
+
+def test_send_telegram_handles_api_error(monkeypatch):
+    _clear_all(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    monkeypatch.setattr(notify.requests, "post", lambda *a, **k: _Resp(401, "unauthorized"))
+    assert notify.send_telegram("hello") is False  # non-200, no raise
+
+
+def test_notify_dispatches_to_telegram_only(monkeypatch):
+    _clear_all(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    seen = {}
+    monkeypatch.setattr(notify.requests, "post",
+                        lambda url, json=None, timeout=0: seen.update(json) or _Resp(200))
+    assert notify.notify("subj", "body") is True
+    assert seen["text"] == "subj\n\nbody"          # subject + body combined for Telegram
+
+
+def test_notify_noop_when_nothing_configured(monkeypatch):
+    _clear_all(monkeypatch)
+    assert notify.notify("subj", "body") is False
+
+
 # ---- heartbeat ------------------------------------------------------------
 
 

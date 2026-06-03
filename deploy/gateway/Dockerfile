@@ -40,6 +40,21 @@ RUN curl -fsSL "$IBC_URL" -o /tmp/ibc.zip \
     && chmod +x /opt/ibc/*.sh /opt/ibc/scripts/*.sh \
     && rm /tmp/ibc.zip
 
+# --- Doppler CLI (runtime secret injection; see ENTRYPOINT) ---
+# VERIFY: the install script drops the binary at /usr/local/bin/doppler.
+RUN curl -Ls https://cli.doppler.com/install.sh | sh
+
+# --- Lay the install out the way IBC expects ---
+# The standalone installer flattens everything into /opt/ibgateway, but IBC looks for the
+# jars at ${TWS_PATH}/ibgateway/<version>/jars. Detect the version from the jar name, symlink
+# the expected path to our flat install, and record the version for the entrypoint. Detected
+# (not hardcoded) so a `stable` channel bump just works on the next rebuild.
+RUN VER="$(ls /opt/ibgateway/jars/jts4launch-*.jar | sed -E 's|.*/jts4launch-([0-9]+)\.jar|\1|')" \
+    && mkdir -p /opt/Jts/ibgateway \
+    && ln -s /opt/ibgateway "/opt/Jts/ibgateway/${VER}" \
+    && echo "${VER}" > /opt/ibc/.twsversion \
+    && echo "IBC layout: TWS_PATH=/opt/Jts, version=${VER}"
+
 COPY config.ini.tmpl /opt/ibc/config.ini.tmpl
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -52,4 +67,8 @@ EXPOSE 4004
 HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
     CMD socat -u OPEN:/dev/null TCP:127.0.0.1:4004 2>/dev/null || exit 1
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# Wrap in `doppler run` so TWS creds are fetched from Doppler at runtime and injected as
+# env (consumed by entrypoint.sh's envsubst) — never stored on the project disk. Needs
+# DOPPLER_TOKEN in the env (passed by compose). Doppler caches an encrypted fallback so a
+# transient Doppler-API outage at restart doesn't block the Gateway coming up.
+ENTRYPOINT ["doppler", "run", "--", "/usr/local/bin/entrypoint.sh"]

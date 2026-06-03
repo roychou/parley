@@ -33,15 +33,15 @@ export DISPLAY=:0
 #    while Gateway keeps its safe localhost-only binding. (fork = one child per client.)
 socat TCP-LISTEN:"${API_PORT_RELAY}",fork,reuseaddr TCP:127.0.0.1:"${API_PORT_INTERNAL}" &
 
-# 4. Launch Gateway under IBC.
-#    VERIFY: gatewaystart.sh is IBC 3.x's launcher; env below is the documented contract.
-#    If your IBC version wants the TWS major version as an arg, pass it (TWS_MAJOR_VRSN).
-export TWS_PATH=/opt/ibgateway
-export IBC_PATH=/opt/ibc
-export IBC_INI=/opt/ibc/config.ini
+# 4. Launch Gateway under IBC — call ibcstart.sh directly (foreground), bypassing
+#    gatewaystart.sh, which hardcodes the wrong version/path defaults and wraps in xterm.
+#    Version was detected at build time (Dockerfile) and the install symlinked to the
+#    layout IBC expects: ${TWS_PATH}/ibgateway/<version>/jars. Creds come from config.ini.
 export LOG_PATH=/opt/ibc/logs
-export TWOFA_TIMEOUT_ACTION=restart
 mkdir -p "$LOG_PATH"
+TWS_MAJOR_VRSN="$(cat /opt/ibc/.twsversion)"
 
-echo "[entrypoint] starting IBC (mode=$TRADING_MODE, api relay 0.0.0.0:${API_PORT_RELAY} -> 127.0.0.1:${API_PORT_INTERNAL})"
-exec /opt/ibc/gatewaystart.sh --gateway
+echo "[entrypoint] starting IBC Gateway v${TWS_MAJOR_VRSN} (mode=$TRADING_MODE, api relay 0.0.0.0:${API_PORT_RELAY} -> 127.0.0.1:${API_PORT_INTERNAL})"
+exec /opt/ibc/scripts/ibcstart.sh "$TWS_MAJOR_VRSN" --gateway \
+    --tws-path=/opt/Jts --ibc-path=/opt/ibc --ibc-ini=/opt/ibc/config.ini \
+    --mode="$TRADING_MODE" --on2fatimeout=restart

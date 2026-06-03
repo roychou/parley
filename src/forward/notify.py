@@ -4,10 +4,11 @@ Operational notifications + heartbeat for the unattended forward clock.
 Two concerns, both host-agnostic (env-configured, no laptop/launchd/macOS coupling) so
 they behave identically on a dev machine and inside the deployment container:
 
-- **Email alert** (`send_email`): a one-line success/failure ping per weekly run, so a
-  failed Sunday session is *loud* instead of a silent hole in the GATE-0 evidence record.
-  Provider-agnostic SMTP via env (SMTP_HOST/PORT/USER/PASSWORD/FROM, ALERT_EMAIL_TO); a
-  no-op (logged, never raised) when SMTP isn't configured, so local runs aren't burdened.
+- **Alert** (`notify`): a one-line success/failure ping per weekly run, so a failed Sunday
+  session is *loud* instead of a silent hole in the GATE-0 evidence record. Dispatches to
+  every configured channel — **Telegram** (TELEGRAM_BOT_TOKEN/CHAT_ID; instant phone push,
+  no sender account) and/or **email** (provider-agnostic SMTP env). A no-op (logged, never
+  raised) when none is configured, so local runs aren't burdened.
 - **Heartbeat** (`write_heartbeat`/`read_heartbeat`/`heartbeat_stale`): a tiny JSON record
   of the last run's wall-clock time + status, so "has the clock gone quiet?" is a cheap,
   pollable check (a separate healthcheck can alert when it goes stale).
@@ -24,6 +25,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,54 @@ def send_email(subject: str, body: str) -> bool:
     except Exception as e:  # noqa: BLE001 — notifications never break the run
         logger.warning(f"alert email failed ({type(e).__name__}: {e})")
         return False
+
+
+# ==========================================
+# TELEGRAM
+# ==========================================
+
+
+def send_telegram(text: str) -> bool:
+    """Send a Telegram message via the Bot API. Returns True if sent, else False.
+
+    Needs TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (a private chat between you and your bot).
+    No-op (logged) when unset; never raises — a notification problem can't break a run."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not (token and chat_id):
+        logger.info("telegram alert skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set")
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            logger.info("telegram alert sent")
+            return True
+        logger.warning(f"telegram alert failed: HTTP {r.status_code} {r.text[:200]}")
+        return False
+    except Exception as e:  # noqa: BLE001 — notifications never break the run
+        logger.warning(f"telegram alert failed ({type(e).__name__}: {e})")
+        return False
+
+
+# ==========================================
+# DISPATCH
+# ==========================================
+
+
+def notify(subject: str, body: str = "") -> bool:
+    """Send an alert over every configured channel (Telegram and/or email). Returns True
+    if at least one channel delivered. Logged no-op when none is configured. This is what
+    the run wraps its success/failure in — channel choice is pure env/config."""
+    text = f"{subject}\n\n{body}" if body else subject
+    sent = send_telegram(text)
+    sent = send_email(subject, body) or sent
+    if not sent:
+        logger.info("no alert channel configured (set TELEGRAM_* and/or SMTP_*)")
+    return sent
 
 
 # ==========================================

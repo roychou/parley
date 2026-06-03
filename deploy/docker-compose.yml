@@ -20,11 +20,13 @@ services:
     build:
       context: ./gateway
     image: parley-gateway:local
-    env_file: .env
     environment:
+      # The ONLY secret on disk: a read-only Doppler service token (deploy/.env). The
+      # entrypoint's `doppler run` uses it to fetch TWS creds at runtime.
+      DOPPLER_TOKEN: ${DOPPLER_TOKEN:?set DOPPLER_TOKEN in deploy/.env}
       TRADING_MODE: paper          # the image refuses anything but paper
       API_PORT_RELAY: "4004"
-      TZ: ${TZ:-UTC}
+      TZ: ${TZ:-Asia/Singapore}
     expose:
       - "4004"                     # internal network only — never add a host `ports:` map
     volumes:
@@ -36,11 +38,11 @@ services:
       context: ..                  # repo root: needs src/ + pyproject.toml + uv.lock
       dockerfile: deploy/app/Dockerfile
     image: parley-app:local
-    env_file: .env
     environment:
+      DOPPLER_TOKEN: ${DOPPLER_TOKEN:?set DOPPLER_TOKEN in deploy/.env}
       IBKR_HOST: gateway           # resolves to the gateway service on the compose network
       IBKR_PORT: "4004"            # the socat relay port
-      TZ: ${TZ:-UTC}
+      TZ: ${TZ:-Asia/Singapore}
     volumes:
       - forward:/app/data/forward  # the GATE-0 track record — back this volume up
       - cache:/app/data/cache      # self-warming price / EDGAR / signal caches

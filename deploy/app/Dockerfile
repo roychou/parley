@@ -20,6 +20,7 @@ RUN apt-get update \
     && curl -fsSL "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-${SUPERCRONIC_ARCH}" \
         -o /usr/local/bin/supercronic \
     && chmod +x /usr/local/bin/supercronic \
+    && curl -Ls https://cli.doppler.com/install.sh | sh \
     && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -35,4 +36,7 @@ COPY deploy/app/crontab ./deploy/app/crontab
 COPY deploy/app/entrypoint.sh /usr/local/bin/app-entrypoint.sh
 RUN chmod +x /usr/local/bin/app-entrypoint.sh
 
-ENTRYPOINT ["/usr/local/bin/app-entrypoint.sh"]
+# Wrap in `doppler run` so secrets (Anthropic key, SMTP, EDGAR UA, spend cap) are fetched
+# from Doppler at runtime and injected as env into the scheduler and every weekly job it
+# spawns — never written to the project disk. Needs DOPPLER_TOKEN (passed by compose).
+ENTRYPOINT ["doppler", "run", "--", "/usr/local/bin/app-entrypoint.sh"]
