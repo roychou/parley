@@ -1,0 +1,24 @@
+# Build context hygiene for the app image (context = repo root). Keep secrets, local
+# state, and dev cruft out of the image; data/reference IS kept (the committed CIK map
+# is COPY'd explicitly in deploy/app/Dockerfile).
+.git
+.github
+.venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+
+# Secrets — never into an image layer.
+.env
+deploy/.env
+
+# Local-only state (mounted as volumes at runtime, or not needed in the image).
+data/cache
+data/forward
+data/experiments
+
+# Docs / planning not needed at runtime.
+_plans
+notes
+*.md

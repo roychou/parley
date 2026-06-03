@@ -1,0 +1,55 @@
+# parley forward-clock deployment.
+#
+#   gateway : hand-rolled IB Gateway + IBC (paper), headless. Holds the broker session.
+#   app     : the parley scheduler (supercronic) — weekly session + daily watchdog.
+#
+# Private network only: the Gateway API is never published to the host/internet (no
+# `ports:` mapping — `expose` keeps 4004 reachable only by sibling containers). Secrets
+# come from deploy/.env (gitignored). State persists on named volumes.
+#
+# Quick start (from deploy/):
+#   cp .env.example .env && $EDITOR .env        # fill in IBKR + SMTP + Anthropic
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f gateway              # watch the IBC login succeed
+#   docker compose run --rm app python -m src.forward.run --as-of "$(date +%F)"  # test
+name: parley
+
+services:
+  gateway:
+    build:
+      context: ./gateway
+    image: parley-gateway:local
+    env_file: .env
+    environment:
+      TRADING_MODE: paper          # the image refuses anything but paper
+      API_PORT_RELAY: "4004"
+      TZ: ${TZ:-UTC}
+    expose:
+      - "4004"                     # internal network only — never add a host `ports:` map
+    volumes:
+      - gateway_settings:/root/Jts # persist jts.ini (API + auto-restart settings) & IBC state
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ..                  # repo root: needs src/ + pyproject.toml + uv.lock
+      dockerfile: deploy/app/Dockerfile
+    image: parley-app:local
+    env_file: .env
+    environment:
+      IBKR_HOST: gateway           # resolves to the gateway service on the compose network
+      IBKR_PORT: "4004"            # the socat relay port
+      TZ: ${TZ:-UTC}
+    volumes:
+      - forward:/app/data/forward  # the GATE-0 track record — back this volume up
+      - cache:/app/data/cache      # self-warming price / EDGAR / signal caches
+    depends_on:
+      gateway:
+        condition: service_healthy # wait for Gateway to be logged in + API live
+    restart: unless-stopped
+
+volumes:
+  gateway_settings:
+  forward:
+  cache:

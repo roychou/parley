@@ -1,0 +1,37 @@
+# IBC configuration TEMPLATE. Rendered to config.ini at container start by entrypoint.sh
+# (envsubst), so credentials are injected from the environment and never baked into the
+# image or committed. Only ${VARS} are substituted; everything else is literal.
+#
+# Full option reference: https://github.com/IbcAlpha/IBC/blob/master/userguide.md
+# Unknown keys are ignored by IBC (logged), so the belt-and-braces settings below are safe.
+
+# ---- Credentials + mode (from env) ----
+IbLoginId=${TWS_USERID}
+IbPassword=${TWS_PASSWORD}
+TradingMode=${TRADING_MODE}
+
+# ---- API ----
+# Gateway keeps its default localhost-only API binding on this port; socat (entrypoint)
+# relays it to the compose network. Accept the inbound API connection without a popup.
+OverrideTwsApiPort=${API_PORT_INTERNAL}
+AcceptIncomingConnectionAction=accept
+# READ-ONLY: the forward clock only *reads* prices/news; the PaperBook is simulated, so
+# no orders are transmitted. Keep this 'yes'. (Going live with the execution adapter is a
+# deliberate, separate change: set ReadOnlyApi=no AND opt in to transmit — see notes.)
+ReadOnlyApi=yes
+
+# ---- Headless login hardening (suppress dialogs that would block an unattended start) ----
+AcceptNonBrokerageAccountWarning=yes
+DismissPasswordExpiryWarning=yes
+DismissNSEComplianceNotice=yes
+LoginDialogDisplayTimeout=60
+ExistingSessionDetectedAction=primary
+ReadOnlyLogin=no
+
+# ---- Keep the session alive across IBKR's daily restart ----
+# Prefer Gateway "auto restart" over "auto logoff" (set once in the Gateway UI / persisted
+# in jts.ini on the volume). IBC re-logs-in automatically after the restart.
+IbAutoClosedown=no
+ClosedownAt=
+ReloginAfterSecondFactorAuthenticationTimeout=yes
+AutoRestartTime=
