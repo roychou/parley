@@ -6,12 +6,9 @@ Ties the whole forward stack into a single command:
   sentiment + news) -> run_forward_session (screen -> decide -> size via the risk
   layer -> execute against the persistent PaperBook) -> save.
 
-Two price/news sources (--source):
-- "fmp": daily bars + news from FMP, no broker. The paper book is simulated, so IBKR
-  is NOT needed to run the forward clock — only later for real order execution. This is
-  the runnable path today.
-- "ibkr": prices + Benzinga news from a running IB Gateway/TWS. Needs the Gateway up +
-  a market-data subscription; the connect/refresh must be validated live (CI has none).
+Prices + Benzinga news come from a running IB Gateway/TWS (the only data source —
+fundamentals come from EDGAR, free). Needs the Gateway up + a market-data
+subscription; the connect/refresh must be validated live (CI has none).
 
 A scheduler (cron/launchd) runs this weekly. The cache-derived helpers
 (current_price_from_cache, volatility_from_cache, dividends_since) are unit-tested.
@@ -36,9 +33,8 @@ from src.backtest.cache import SignalCache
 from src.backtest.costs import CostModel
 from src.backtest.screen import select_candidates
 from src.data.dividends import load_dividends
-from src.data.fetch_prices import get_prices, load_latest_cache
+from src.data.fetch_prices import load_latest_cache
 from src.data.filings import recent_filing_dates
-from src.data.fmp_client import get_stock_news
 from src.data.fundamentals import get_fundamentals_as_of
 from src.data.technicals import get_technicals_as_of
 from src.data.universe import nasdaq100_as_of
@@ -104,44 +100,6 @@ def _prev_day(d: str) -> str:
     return (date(y, m, day) - timedelta(days=1)).isoformat()
 
 
-def refresh_prices_fmp(tickers: list[str], period: str = "5y") -> None:
-    """Forward price refresh with no broker: fetch + cache daily bars from FMP — the
-    same source the backtest uses. Lets the weekly clock run without IB Gateway/TWS;
-    IBKR is only needed later for real order execution (the paper book is simulated)."""
-    ok = 0
-    for t in tickers:
-        try:
-            get_prices(t, period)  # fetches from FMP and writes the period cache
-            ok += 1
-        except Exception as e:  # one bad symbol must not abort the weekly run
-            logger.warning(f"FMP price refresh failed for {t}: {e}")
-    logger.info(f"FMP price refresh: {ok}/{len(tickers)} tickers cached (period={period})")
-
-
-def fmp_news_source():
-    """A lazy NewsSource backed by FMP: fetches a ticker's recent news on demand (only
-    for screened candidates), point-in-time filtered to published <= as_of."""
-    from datetime import date as _date
-
-    def source(ticker: str, as_of: str, lookback_days: int) -> list[dict]:
-        start = (_date.fromisoformat(as_of) - timedelta(days=lookback_days)).isoformat()
-        out: list[dict] = []
-        for r in get_stock_news(ticker, start, as_of, limit=50):
-            pub = (r.get("publishedDate") or "")[:10]
-            if not pub or pub > as_of or pub < start:  # point-in-time + window
-                continue
-            out.append({
-                "title": r.get("title", ""),
-                "summary": r.get("text", ""),
-                "published": pub,
-                "source": r.get("site") or r.get("publisher", ""),
-                "url": r.get("url", ""),
-            })
-        return out
-
-    return source
-
-
 # ==========================================
 # ONE FORWARD SESSION
 # ==========================================
@@ -151,7 +109,6 @@ async def run_forward_paper_session(
     tickers: list[str],
     as_of: str,
     *,
-    price_source: str = "ibkr",
     include_news: bool = True,
     use_batch: bool = True,
     use_risk: bool = True,
@@ -162,11 +119,10 @@ async def run_forward_paper_session(
 ) -> dict:
     """Run one weekly forward paper session and persist the book.
 
-    price_source: "ibkr" pulls prices + news from a running IB Gateway/TWS; "fmp"
-    pulls daily bars from FMP with no broker (the book is simulated, so IBKR is only
-    needed later for real order execution). `refresh=False` skips the pull (warm cache).
+    Prices + news come from a running IB Gateway/TWS. `refresh=False` skips the pull
+    and runs against the warm cache.
     """
-    period = FORWARD_PRICE_PERIOD if price_source == "ibkr" else "5y"
+    period = FORWARD_PRICE_PERIOD
     book = PaperBook.load(book_path)
 
     # Screen FIRST (filing dates, not prices), then refresh only the names we'll
@@ -181,24 +137,15 @@ async def run_forward_paper_session(
 
     news_store: dict[str, list[dict]] = {}
     if refresh:
-        if price_source == "ibkr":
-            ib = await connect()
-            try:
-                await refresh_price_cache(ib, candidates, period=period)
-                if include_news:
-                    news_store = await fetch_news_for(ib, candidates, as_of)
-            finally:
-                ib.disconnect()
-        else:
-            refresh_prices_fmp(candidates, period)
+        ib = await connect()
+        try:
+            await refresh_price_cache(ib, candidates, period=period)
+            if include_news:
+                news_store = await fetch_news_for(ib, candidates, as_of)
+        finally:
+            ib.disconnect()
 
-    # News source: FMP fetches lazily per candidate; IBKR uses the pre-fetched store.
-    if not include_news:
-        news_source = news_source_from_store({})
-    elif price_source == "fmp":
-        news_source = fmp_news_source()
-    else:
-        news_source = news_source_from_store(news_store)
+    news_source = news_source_from_store(news_store if include_news else {})
 
     client = AsyncAnthropic()
     base_mc = BatchLLM(client) if use_batch else client.messages
@@ -243,8 +190,6 @@ def main() -> None:
                         help="Universe (default: current Nasdaq-100).")
     parser.add_argument("--as-of", default=date.today().isoformat(),
                         help="Decision date (default today).")
-    parser.add_argument("--source", choices=["ibkr", "fmp"], default="ibkr",
-                        help="Price/news source: ibkr (Gateway/TWS) or fmp (no broker).")
     parser.add_argument("--book", default=None,
                         help="PaperBook path (default data/forward/paper_book.json).")
     parser.add_argument("--no-news", action="store_true", help="Disable the news specialist.")
@@ -259,12 +204,11 @@ def main() -> None:
     args = parser.parse_args()
 
     tickers = args.tickers or nasdaq100_as_of(args.as_of)
-    logger.info(f"forward session as_of={args.as_of} | source={args.source} | {len(tickers)} "
+    logger.info(f"forward session as_of={args.as_of} | {len(tickers)} "
                 f"tickers | news={not args.no_news} risk={not args.no_risk} "
                 f"batch={not args.no_batch}")
     summary = asyncio.run(run_forward_paper_session(
         tickers, args.as_of,
-        price_source=args.source,
         include_news=not args.no_news, use_risk=not args.no_risk, use_batch=not args.no_batch,
         max_llm_usd=args.max_llm_usd, refresh=not args.no_refresh,
         book_path=Path(args.book) if args.book else DEFAULT_BOOK_PATH,

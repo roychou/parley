@@ -7,10 +7,10 @@
 # data/forward/logs/ and a one-line status to stdout (which launchd captures).
 #
 # Configurable via environment (set in the plist, or inline for a manual run):
-#   PARLEY_SOURCE        ibkr | fmp   (default ibkr; fmp needs no Gateway — see the doc)
 #   PARLEY_MAX_LLM_USD   hard LLM spend cap for the session (default 8)
 #   PARLEY_ARGS          extra args passed through to src.forward.run (e.g. --no-news)
 #
+# Prices + news come from IB Gateway/TWS, so the Gateway must be up when this runs.
 # launchd runs with a minimal environment, so everything here is absolute.
 
 set -uo pipefail
@@ -19,7 +19,6 @@ REPO="/Users/roychou/Development/parley"
 UV="/Users/roychou/.local/bin/uv"
 [ -x "$UV" ] || UV="$(command -v uv || true)"
 
-SOURCE="${PARLEY_SOURCE:-ibkr}"
 CAP="${PARLEY_MAX_LLM_USD:-8}"
 EXTRA="${PARLEY_ARGS:-}"
 
@@ -28,12 +27,12 @@ mkdir -p "$LOG_DIR"
 STAMP="$(date +%Y-%m-%d_%H%M%S)"
 LOG="$LOG_DIR/forward_$STAMP.log"
 
-echo "[$(date)] forward weekly: source=$SOURCE cap=\$$CAP -> $LOG"
+echo "[$(date)] forward weekly: cap=\$$CAP -> $LOG"
 cd "$REPO" || { echo "[$(date)] FATAL: cannot cd $REPO"; exit 1; }
 if [ -z "$UV" ]; then echo "[$(date)] FATAL: uv not found"; exit 1; fi
 
 # shellcheck disable=SC2086
-"$UV" run python -m src.forward.run --source "$SOURCE" --max-llm-usd "$CAP" $EXTRA \
+"$UV" run python -m src.forward.run --max-llm-usd "$CAP" $EXTRA \
     >> "$LOG" 2>&1
 rc=$?
 

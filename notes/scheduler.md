@@ -7,24 +7,18 @@ once on the next wake.
 Pieces:
 - `scripts/forward_weekly.sh` — the wrapper. Runs the session, full output to a dated
   log under `data/forward/logs/`, a one-line status to stdout. Configurable via env:
-  `PARLEY_SOURCE` (ibkr|fmp), `PARLEY_MAX_LLM_USD`, `PARLEY_ARGS`.
+  `PARLEY_MAX_LLM_USD`, `PARLEY_ARGS`.
 - `scripts/com.parley.forward-weekly.plist` — the LaunchAgent. Default: **Sunday 17:00**,
-  `PARLEY_SOURCE=ibkr`, cap `$8`. Edit `Weekday`/`Hour`/`Minute` and the `PARLEY_*` vars.
+  cap `$8`. Edit `Weekday`/`Hour`/`Minute` and the `PARLEY_*` vars.
 
-## Choose the source — the one real decision
+## Gateway must be up
 
-- **`fmp` (recommended for the unattended schedule).** No broker dependency, so the
-  weekly tick *never silently misses*. The paper book is simulated, so this is a fully
-  faithful weekly record.
-- **`ibkr`.** Real-broker data, but **IB Gateway must be running and logged in at the
-  scheduled time** — and Gateway force-logs-out daily. So a hands-off `ibkr` schedule
-  needs either (a) you ensuring Gateway is up before the run, or (b) IBC to keep it
-  logged in headless. Otherwise the run fails (logged, not silent) and the week is lost.
-
-Practical setup: **schedule on `fmp`** so the clock is reliable, and run `ibkr` **by
-hand** when you want to exercise the real connection (`PARLEY_SOURCE=ibkr
-scripts/forward_weekly.sh`). Switch the schedule to `ibkr` once IBC (or your routine)
-guarantees Gateway is up.
+Prices + Benzinga news come from IB Gateway/TWS (fundamentals are EDGAR, free) — there
+is no broker-free data source. **IB Gateway must be running and logged in at the
+scheduled time**, and Gateway force-logs-out daily, so a hands-off schedule needs
+either (a) you ensuring Gateway is up before the run, or (b) IBC to keep it logged in
+headless. If Gateway is down the run fails loudly (logged, not silent) and the week is
+lost — re-run by hand once Gateway is back (`scripts/forward_weekly.sh`).
 
 ## Install
 
@@ -41,7 +35,7 @@ After editing the plist later, reload: `bootout` then `bootstrap` again.
 
 ```sh
 # Run it once right now, by hand (uses the plist's schedule-independent logic):
-PARLEY_SOURCE=fmp PARLEY_MAX_LLM_USD=5 scripts/forward_weekly.sh
+PARLEY_MAX_LLM_USD=5 scripts/forward_weekly.sh
 
 # Fire the scheduled job immediately (tests the launchd wiring too):
 launchctl kickstart -k gui/$(id -u)/com.parley.forward-weekly

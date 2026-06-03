@@ -45,5 +45,5 @@ Pure planning + the paper guard are unit-tested.
 PaperBook. To make the scheduled clock transmit: wire `broker_rebalance` into
 `run_forward_paper_session` (feed it the session's decisions/vols/prices and the
 PaperBook's equity_curve for the drawdown governor), then reconcile the book from the
-returned fills. Keep `--execute sim` (FMP, no broker) as the default; gate transmit
-behind an explicit flag.
+returned fills. Keep `--execute sim` (the simulated PaperBook) as the default; gate
+transmit behind an explicit flag.

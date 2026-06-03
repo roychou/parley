@@ -11,7 +11,7 @@ from src.data.technicals import process_ticker
 
 # This server runs as a subprocess spawned by the agent over stdio. MCP's stdio
 # client launches it with a sanitized environment that does NOT inherit the
-# parent's vars, so load .env here or FMP_API_KEY / EDGAR_USER_AGENT go missing.
+# parent's vars, so load .env here or EDGAR_USER_AGENT goes missing.
 load_dotenv()
 
 # Set up logging so we can actually see the Python stack traces in our terminal

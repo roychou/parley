@@ -206,13 +206,13 @@ def _edgar_fundamentals_as_of(
     # Period-staleness guard: the *data period* must also be recent, not just the
     # filing date. A recently-filed filing that covers a year-old period signals a
     # concept misparse or a foreign filer whose us-gaap facts are sparse (e.g. SHOP
-    # filing 40-F). Returning None lets get_fundamentals_as_of fall back to FMP.
+    # filing 40-F). Returning None means this name simply has no usable fundamentals.
     period_cap = ANNUAL_MAX_PERIOD_AGE_DAYS if annual else MAX_FILING_AGE_DAYS + 120
     period_age = _days_between(latest["period_end_date"], as_of_date)
     if period_age is None or period_age > period_cap:
         logger.warning(
             f"stale data period for {ticker}: period {latest['period_end_date']} "
-            f"is {period_age}d before {as_of_date} — deferring to FMP fallback"
+            f"is {period_age}d before {as_of_date} — no usable fundamentals"
         )
         return None
 

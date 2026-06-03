@@ -3,7 +3,7 @@
 <!--
   Weekly forward paper-trading run (macOS LaunchAgent).
   Install: copy to ~/Library/LaunchAgents/ and load it — see notes/scheduler.md.
-  Edit Weekday/Hour/Minute to change the schedule, and PARLEY_* to change source/cap.
+  Edit Weekday/Hour/Minute to change the schedule, and PARLEY_* to change the spend cap.
   Runs only while you are logged in (laptop-first); if the Mac is asleep at the
   scheduled time, launchd runs it once on the next wake.
 -->
@@ -31,8 +31,6 @@
 
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PARLEY_SOURCE</key>
-        <string>ibkr</string>
         <key>PARLEY_MAX_LLM_USD</key>
         <string>8</string>
     </dict>
