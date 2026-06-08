@@ -68,11 +68,11 @@ async def test_fundamentals_reused_same_band_technicals_recompute(monkeypatch, t
     fund_calls: list[str] = []
     tech_calls: list[str] = []
 
-    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False):
+    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False, model=None):
         fund_calls.append(as_of)
         return _fund_analysis()
 
-    async def fake_technicals(client, ticker, as_of, data, anonymize=False):
+    async def fake_technicals(client, ticker, as_of, data, anonymize=False, model=None):
         tech_calls.append(as_of)
         return _tech_analysis()
 
@@ -110,11 +110,11 @@ async def test_fundamentals_recompute_when_pe_crosses_band(monkeypatch, tmp_path
     """When P/E crosses a band boundary the fundamentals signal is recomputed."""
     fund_calls: list[str] = []
 
-    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False):
+    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False, model=None):
         fund_calls.append(as_of)
         return _fund_analysis()
 
-    async def fake_technicals(client, ticker, as_of, data, anonymize=False):
+    async def fake_technicals(client, ticker, as_of, data, anonymize=False, model=None):
         return _tech_analysis()
 
     monkeypatch.setattr(bsup, "_call_fundamentals_with_data", fake_fundamentals)
@@ -145,10 +145,10 @@ async def test_fundamentals_recompute_when_pe_crosses_band(monkeypatch, tmp_path
 
 
 def _patch_specialist_calls(monkeypatch):
-    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False):
+    async def fake_fundamentals(client, ticker, as_of, data, anonymize=False, model=None):
         return _fund_analysis()
 
-    async def fake_technicals(client, ticker, as_of, data, anonymize=False):
+    async def fake_technicals(client, ticker, as_of, data, anonymize=False, model=None):
         return _tech_analysis()
 
     monkeypatch.setattr(bsup, "_call_fundamentals_with_data", fake_fundamentals)
@@ -160,7 +160,8 @@ async def test_sentiment_included_when_filing_exists(monkeypatch, tmp_path):
     _patch_specialist_calls(monkeypatch)
     sentiment_calls: list[str] = []
 
-    async def fake_sentiment(messages_api, ticker, as_of, config=None, summary_cache=None):
+    async def fake_sentiment(messages_api, ticker, as_of, config=None, summary_cache=None,
+                             synthesis_model=None):
         sentiment_calls.append(ticker)
         return SentimentAnalysis(
             specialist="sentiment", ticker=ticker, signal="BEARISH", confidence=0.6,

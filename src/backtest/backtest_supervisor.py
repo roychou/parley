@@ -27,7 +27,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from anthropic import AsyncAnthropic
 
@@ -40,6 +40,11 @@ from src.agents.sentiment_specialist import (
 )
 from src.agents.technicals_specialist import TECHNICALS_ROLE_PROMPT
 from src.backtest.cache import SignalCache, cached_signal
+from src.backtest.filing_sentiment import (
+    HYBRID_TONE_DIR,
+    HYBRID_TONE_VERSION,
+    run_sentiment_hybrid,
+)
 from src.data.fundamentals import ValuationSnapshot, get_fundamentals_as_of, pe_band
 from src.data.technicals import TechnicalsSnapshot, get_technicals_as_of
 from src.llm import MessageCreator
@@ -82,8 +87,16 @@ async def run_backtest_supervisor(
     scaffold_config: ScaffoldConfig | None = None,
     summary_cache: FilingSummaryCache | None = None,
     anonymize: bool = False,
+    decision_model: str | None = None,
+    hybrid_sentiment: bool = False,
 ) -> Decision:
     """Produce a Decision for (ticker, as_of) using point-in-time data and the real LLM.
+
+    decision_model (optional): override the model for ALL judging calls — fundamentals,
+    technicals, AND the sentiment scaffold (root + leaf) + synthesis. Used by the model-
+    cutoff ladder to swap in an older-cutoff model for a longer clean window. Both root and
+    leaf move together: a newer leaf (e.g. Haiku 4.5, Jul-2025 cutoff) would silently
+    re-contaminate any pre-Aug-2025 date, collapsing the clean window. None = deployed ROOT.
 
     Loaders default to the production data layer functions. Tests can inject
     stubs to avoid touching FMP.
@@ -111,15 +124,21 @@ async def run_backtest_supervisor(
         raise ValueError(f"No technicals data available for {ticker} as of {as_of}")
 
     fundamentals_key = f"{fundamentals_data.report_date}_pe-{pe_band(fundamentals_data.pe_ratio)}"
+    model = decision_model or MODEL
+    # Ladder runs move root AND leaf to the old-cutoff model (see docstring). Caller's
+    # scaffold_config (e.g. batch concurrency) is preserved but its models are overridden.
+    if decision_model is not None:
+        base_cfg = scaffold_config or ScaffoldConfig()
+        scaffold_config = replace(base_cfg, root_model=decision_model, leaf_model=decision_model)
 
     coros = [
         cached_signal(
             signal_cache, "fundamentals", ticker, fundamentals_key, FundamentalsAnalysis,
-            lambda: _call_fundamentals_with_data(mc, ticker, as_of, fundamentals_data, anonymize),
+            lambda: _call_fundamentals_with_data(mc, ticker, as_of, fundamentals_data, anonymize, model),
         ),
         cached_signal(
             signal_cache, "technicals", ticker, as_of, TechnicalsAnalysis,
-            lambda: _call_technicals_with_data(mc, ticker, as_of, technicals_data, anonymize),
+            lambda: _call_technicals_with_data(mc, ticker, as_of, technicals_data, anonymize, model),
         ),
     ]
     # Sentiment (optional): keyed by the current filing accession, so it's reused
@@ -131,11 +150,19 @@ async def run_backtest_supervisor(
     if include_sentiment and not anonymize:
         sentiment_key = current_filing_key(ticker, as_of)
         if sentiment_key:
+            if hybrid_sentiment:
+                tone_cache = FilingSummaryCache(HYBRID_TONE_DIR, version=HYBRID_TONE_VERSION)
+                sentiment_compute = lambda: run_sentiment_hybrid(  # noqa: E731
+                    mc, ticker, as_of, tone_cache=tone_cache, synthesis_model=model,
+                )
+            else:
+                sentiment_compute = lambda: run_sentiment_specialist(  # noqa: E731
+                    mc, ticker, as_of, config=scaffold_config, summary_cache=summary_cache,
+                    synthesis_model=model,
+                )
             coros.append(cached_signal(
                 signal_cache, "sentiment", ticker, sentiment_key, SentimentAnalysis,
-                lambda: run_sentiment_specialist(
-                    mc, ticker, as_of, config=scaffold_config, summary_cache=summary_cache
-                ),
+                sentiment_compute,
             ))
 
     signals = list(await asyncio.gather(*coros))
@@ -177,6 +204,7 @@ async def _call_fundamentals_with_data(
     as_of: str,
     data: ValuationSnapshot,
     anonymize: bool = False,
+    model: str = MODEL,
 ) -> FundamentalsAnalysis:
     directive, data_dict = _analyze_directive(ticker, as_of, asdict(data), anonymize)
     user_prompt = (
@@ -188,7 +216,7 @@ async def _call_fundamentals_with_data(
     )
 
     response = await messages_api.create(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=FUNDAMENTALS_ROLE_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
@@ -202,7 +230,7 @@ async def _call_fundamentals_with_data(
 
     logger.info(
         f"api_usage call_site=backtest_fundamentals input_tokens={response.usage.input_tokens} "
-        f"output_tokens={response.usage.output_tokens} model={MODEL}"
+        f"output_tokens={response.usage.output_tokens} model={model}"
     )
 
     for block in response.content:
@@ -223,6 +251,7 @@ async def _call_technicals_with_data(
     as_of: str,
     data: TechnicalsSnapshot,
     anonymize: bool = False,
+    model: str = MODEL,
 ) -> TechnicalsAnalysis:
     directive, data_dict = _analyze_directive(ticker, as_of, asdict(data), anonymize)
     user_prompt = (
@@ -234,7 +263,7 @@ async def _call_technicals_with_data(
     )
 
     response = await messages_api.create(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=TECHNICALS_ROLE_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
@@ -248,7 +277,7 @@ async def _call_technicals_with_data(
 
     logger.info(
         f"api_usage call_site=backtest_technicals input_tokens={response.usage.input_tokens} "
-        f"output_tokens={response.usage.output_tokens} model={MODEL}"
+        f"output_tokens={response.usage.output_tokens} model={model}"
     )
 
     for block in response.content:

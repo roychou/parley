@@ -185,13 +185,17 @@ async def run_sentiment_specialist(
     as_of: str,
     config: ScaffoldConfig | None = None,
     summary_cache: FilingSummaryCache | None = None,
+    synthesis_model: str | None = None,
 ) -> SentimentAnalysis | None:
     """Produce a SentimentAnalysis for (ticker, as_of) from the filing narrative, or
     None if no filing is available as of the date (caller drops sentiment that period).
 
     messages_api is the injected LLM seam: client.messages on the live path, or a
     BatchLLM on the batched path (which coalesces the scaffold's map fan-out).
-    summary_cache (optional) reuses per-filing summaries across quarters/tickers."""
+    summary_cache (optional) reuses per-filing summaries across quarters/tickers.
+    synthesis_model (optional) overrides the synthesis model — set by the model-cutoff
+    ladder so the deciding call uses the old-cutoff model (the scaffold's root/leaf are set
+    via config). None = deployed ROOT_MODEL."""
     current, prior = _select_filings(ticker, as_of)
     if current is None:
         return None
@@ -204,7 +208,8 @@ async def run_sentiment_specialist(
     )
 
     return await _synthesize_sentiment(
-        messages_api, ticker, as_of, current, current_summary, prior_summary
+        messages_api, ticker, as_of, current, current_summary, prior_summary,
+        synthesis_model=synthesis_model,
     )
 
 
@@ -215,7 +220,9 @@ async def _synthesize_sentiment(
     current: dict,
     current_summary: str,
     prior_summary: str | None,
+    synthesis_model: str | None = None,
 ) -> SentimentAnalysis:
+    model = synthesis_model or ROOT_MODEL
     user_prompt = (
         f"Ticker: {ticker}\nAs of: {as_of}\n"
         f"Current filing: {current['form']} filed {current['filed']}\n\n"
@@ -224,7 +231,7 @@ async def _synthesize_sentiment(
         f"{prior_summary or '(no prior filing available)'}"
     )
     resp = await messages_api.create(
-        model=ROOT_MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=_SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": user_prompt}],
@@ -236,7 +243,7 @@ async def _synthesize_sentiment(
         tool_choice={"type": "tool", "name": "submit_sentiment"},
     )
     logger.info(
-        f"api_usage call_site=sentiment_synthesis model={ROOT_MODEL} "
+        f"api_usage call_site=sentiment_synthesis model={model} "
         f"input_tokens={resp.usage.input_tokens} output_tokens={resp.usage.output_tokens}"
     )
     for block in resp.content:
