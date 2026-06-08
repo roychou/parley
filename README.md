@@ -4,7 +4,8 @@ A multi-agent system that analyzes US equities and trades them on a **paper** ac
 Specialist agents (fundamentals, technicals, sentiment, news) each produce a typed analysis;
 a supervisor synthesizes them into a BUY/HOLD/SELL decision; a risk layer sizes the position;
 and the result is executed against an Interactive Brokers paper account. Built on the direct
-Anthropic SDK with an own orchestration layer — deliberately not a framework.
+Anthropic SDK with its own thin orchestration (a supervisor plus a deterministic synthesis
+vote) — deliberately not a framework.
 
 > Paper trading only. Nothing here is financial advice; trading real money carries real risk
 > of loss. Real-money execution is a future, deliberate step (see `notes/productization.md`).
@@ -33,10 +34,17 @@ clean evaluation is **forward paper trading** on post-cutoff, unseen data. So pa
 weekly forward clock and treats that accruing record — not any backtest number — as the real
 verdict. See `notes/productization.md` (GATE 0) for the full reasoning.
 
+To put a number on it, a cross-sectional **Information Coefficient** test was run on a
+model-cutoff *ladder* — an older-cutoff model manufactures a longer contamination-free window
+than the deployed model's ~4 months. The result is a **null**: over 39 clean post-cutoff dates
+(~3,200 name-observations), mean IC is **−0.005** (t −0.21) — no detectable cross-sectional
+ranking edge. That negative result is the project's headline finding, not a footnote; it tests
+name *ranking* only (not risk sizing or timing). See `results/ic_validation.md`.
+
 ## Layout
 
 - `src/agents/`, `src/supervisor.py`, `src/synthesis.py` — specialists, dispatch, synthesis
-- `src/mcp_servers/` — each specialist's tool surface as an MCP server (standalone path)
+- `src/mcp_servers/` — the fundamentals and technicals specialists' tool surfaces as MCP servers (standalone path; sentiment/news have none)
 - `src/data/` — EDGAR fundamentals, technicals, price cache, Nasdaq-100 universe, dividends
 - `src/risk.py` — the capital-preservation layer
 - `src/backtest/` — point-in-time replay, baselines, costs, metrics, walk-forward, temporal guard

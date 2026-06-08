@@ -24,7 +24,8 @@ data/execution boundary (see "Two-regime / two-pattern split"):
 - `src/agents/` — `fundamentals_specialist`, `technicals_specialist`, `sentiment_specialist`
   (map-reduce over EDGAR filing narrative), `news_specialist`; `scaffold.py`, `safety.py`
   (prompt-injection hardening)
-- `src/mcp_servers/` — FastMCP tool surfaces per specialist (used by the standalone path)
+- `src/mcp_servers/` — FastMCP tool surfaces for the fundamentals and technicals specialists
+  (used by the standalone path; sentiment and news have no MCP server)
 - `src/schemas/` — `SpecialistSignal` base + `FundamentalsAnalysis`/`TechnicalsAnalysis`/
   `NewsAnalysis`/`Decision`
 - `src/data/` — `edgar.py` (PIT XBRL fundamentals + filings), `fundamentals.py`, `technicals.py`,
@@ -60,9 +61,9 @@ justify a framework, switching is a refactor, not a rewrite.
 
 ## MCP for specialist tool surfaces
 
-Each specialist exposes its data-access tools through an MCP server, for protocol-level isolation
-(each surface is independently versionable/testable/runnable behind a process boundary) and
-reusability. The cost is protocol overhead (JSON-RPC, server lifecycle, schemas duplicated between
+The fundamentals and technicals specialists expose their data-access tools through an MCP server
+(sentiment and news do not), for protocol-level isolation (each surface is independently
+versionable/testable/runnable behind a process boundary) and reusability. The cost is protocol overhead (JSON-RPC, server lifecycle, schemas duplicated between
 server and client), accepted for the isolation. *(The forward path calls the data layer directly
 for point-in-time control + speed; MCP is the standalone/interactive path — see the fork below.)*
 
@@ -116,9 +117,12 @@ contaminated by construction: the model has ingested what these tickers did. The
 weights, not the inputs, so point-in-time *data* hygiene does not fix it — an in-window backtest
 measures memory + strategy, confounded, and inflates exactly the multi-agent line we care about.
 `src/backtest/temporal.py` operationalizes the split (clean vs. contaminated decision dates); the
-honest conclusion is that **a backtest cannot establish this strategy's edge** — the clean
-post-cutoff window is too short for significance. **Forward paper trading is the only clean
-evaluation**, which is why it's the production path. Models are pinned (`src/models.py`) so the
+honest conclusion is that **a backtest cannot establish this strategy's edge** — the deployed
+model's clean post-cutoff window is too short for significance. A cross-sectional Information
+Coefficient test on a model-cutoff *ladder* (an older-cutoff model manufactures a longer clean
+window) sharpens this into a measured **null**: mean IC −0.005 (t −0.21) over 39 clean dates,
+no detectable cross-sectional ranking edge (`results/ic_validation.md`). **Forward paper trading
+is the only fully clean evaluation**, which is why it's the production path. Models are pinned (`src/models.py`) so the
 forward record stays clean relative to a fixed training cutoff; a model upgrade is a deliberate
 re-validation event. Full reasoning + the gating: `notes/productization.md` (GATE 0).
 
