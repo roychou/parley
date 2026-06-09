@@ -1,6 +1,6 @@
 # Theses
 
-Running observations from the build. Not structured writing — working material for blog posts, design work, and design notes. Entries should be specific and opinionated, not hedged.
+Running observations from the build. Not structured writing — working material for design notes and blog posts. Entries should be specific and opinionated, not hedged.
 
 ---
 

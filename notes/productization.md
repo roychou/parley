@@ -4,11 +4,8 @@
 > artifact. The goal is now a tool the author would trust with **personal real
 > capital**. This document supersedes the old Release-1/2/3 calendar gating: gates are
 > now **capability- and capital-preservation-based, not calendar-based**. Nothing here
-> is financial advice; trading real money carries real risk of loss.
->
-> **This is an independent track** from the product in `_plans/local-notes.md`
-> (decided 31 May 2026: two separate tracks, neither subordinate). parley advances
-> on the gates below, on its own time budget — not on product dates.
+> is financial advice; trading real money carries real risk of loss. parley advances
+> on the gates below on its own capability-gated budget.
 
 ---
 
@@ -121,9 +118,9 @@ What a *clean* test actually requires:
 sane, well-formed decisions?), *not* edge evidence. For the **product track** this
 matters less than it sounds — live trading is always post-cutoff, so contamination
 corrupts the backtest-as-predictor, not live performance; gate the edge claim on
-post-cutoff + forward paper. For the **product track**, the senior move is to
-*surface* this analysis (post-cutoff result + anonymization gap + why forward paper
-beats the backtest) — understanding the problem is a stronger signal than any return.
+post-cutoff + forward paper. The honest move is to *surface* this analysis (post-cutoff
+result + anonymization gap + why forward paper beats the backtest) — understanding the
+problem is a stronger signal than any backtested return.
 
 0.1 **Transaction-cost & slippage model.** ✅ **DONE (31 May 2026).**
 `src/backtest/costs.py` (`CostModel`): adverse-fill slippage + commission

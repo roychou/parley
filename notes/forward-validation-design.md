@@ -2,7 +2,6 @@
 
 > Status: design + first spike landed 4 Jun 2026. The IC core (`src/backtest/ic.py`,
 > 17 tests) is built; the score-all driver that feeds it is the next build.
-> Governs the "expedite the forward record" thread in `_plans/local-notes.md`.
 
 ## The problem
 
@@ -93,7 +92,7 @@ each clean date** — a name parley declined is information. So:
   signal quality; **IC *is* the signal→return half, measured directly.** "Decompose" =
   existing eval + this harness. Nothing new to build.
 
-So all three of the local-notes's thread-3 ideas reduce to **one build: the score-all IC
+So all three ideas reduce to **one build: the score-all IC
 harness.** The IC math is done; the driver is the remaining work.
 
 ## Honest caveats (do not over-read the t-stat)
