@@ -38,8 +38,10 @@ To put a number on it, a cross-sectional **Information Coefficient** test was ru
 model-cutoff *ladder* — an older-cutoff model manufactures a longer contamination-free window
 than the deployed model's ~4 months. The result is a **null**: over 39 clean post-cutoff dates
 (~3,200 name-observations), mean IC is **−0.005** (t −0.21) — no detectable cross-sectional
-ranking edge. That negative result is the project's headline finding, not a footnote; it tests
-name *ranking* only (not risk sizing or timing). See `results/ic_validation.md`.
+ranking edge. The test was powered to catch a large edge (min detectable IC ≈ 0.06), so it rules
+out a strong ranking signal but not a small one — the honest boundary of the null. That negative
+result is the project's headline finding, not a footnote; it tests name *ranking* only (not risk
+sizing or timing). See `results/ic_validation.md`.
 
 ## Layout
 

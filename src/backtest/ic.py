@@ -202,3 +202,81 @@ def select_non_overlapping(dates: list[str], horizon_days: int, spacing_days: in
         return []
     step = max(1, math.ceil(horizon_days / max(1, spacing_days)))
     return sorted(dates)[::step]
+
+
+# ==========================================
+# MINIMUM DETECTABLE EFFECT (how strong is the null?)
+# ==========================================
+# A null IC (t ≈ 0) is "absence of evidence", NOT "evidence of absence" — unless you say what
+# effect size the test could have caught. The MDE answers that: the smallest true mean IC the
+# test had `power` probability of detecting at significance `alpha`. It turns "no detectable
+# edge" into "ruled out IC ≥ X; cannot rule out a smaller one", which is the honest, defensible
+# form of the result. Pure math on (std of per-date ICs, n_dates) — derivable from ic_by_date.csv.
+
+
+def _inv_norm_cdf(p: float) -> float:
+    """Inverse standard-normal CDF (quantile) via Acklam's rational approximation,
+    accurate to ~1e-9 over (0,1). Avoids a scipy dependency. _inv_norm_cdf(0.975)≈1.95996."""
+    if not 0.0 < p < 1.0:
+        raise ValueError("p must be in (0, 1)")
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+    p_low, p_high = 0.02425, 1 - 0.02425
+    if p < p_low:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
+               ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    if p <= p_high:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / \
+               (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+    q = math.sqrt(-2 * math.log(1 - p))
+    return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
+            ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+
+
+@dataclass(frozen=True)
+class MDE:
+    se: float              # standard error of the mean IC (independent-dates: std/sqrt(n))
+    sig_threshold: float   # |mean IC| that would read significant at `alpha` (|t| >= z_alpha/2)
+    mde: float             # smallest true |mean IC| detectable with probability `power`
+    power: float
+    alpha: float
+    n_dates: int
+    overlap_optimistic: bool  # True if dates overlap -> true SE larger, so real MDE is worse
+
+
+def minimum_detectable_ic(
+    std_ic: float, n_dates: int, *, power: float = 0.80, alpha: float = 0.05,
+    overlap: bool = False,
+) -> MDE | None:
+    """Smallest true mean IC this test could detect (two-sided), from the per-date IC spread.
+
+    se = std_ic / sqrt(n_dates); sig_threshold = z_{alpha/2}*se (significant if observed);
+    mde = (z_{alpha/2} + z_{power})*se (detectable with `power` probability). None if n<2.
+
+    CAVEAT: se assumes INDEPENDENT dates. With overlapping forward windows the true SE is
+    larger (autocorrelated per-date ICs), so the real MDE is *worse* (bigger) than reported;
+    `overlap=True` records that the figure is optimistic. A Newey-West SE would tighten this.
+    """
+    if n_dates < 2 or std_ic <= 0:
+        return None
+    se = std_ic / math.sqrt(n_dates)
+    z_alpha = _inv_norm_cdf(1 - alpha / 2)
+    z_power = _inv_norm_cdf(power)
+    return MDE(
+        se=se,
+        sig_threshold=z_alpha * se,
+        mde=(z_alpha + z_power) * se,
+        power=power,
+        alpha=alpha,
+        n_dates=n_dates,
+        overlap_optimistic=overlap,
+    )

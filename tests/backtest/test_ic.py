@@ -3,9 +3,11 @@ import math
 import pytest
 
 from src.backtest.ic import (
+    _inv_norm_cdf,
     cross_sectional_ic,
     forward_return,
     ic_summary,
+    minimum_detectable_ic,
     select_non_overlapping,
     spearman,
 )
@@ -157,3 +159,35 @@ def test_select_non_overlapping_thins_by_horizon():
 def test_select_non_overlapping_noop_when_horizon_fits():
     dates = ["2026-02-01", "2026-02-08", "2026-02-15"]
     assert select_non_overlapping(dates, horizon_days=5, spacing_days=5) == dates
+
+
+# ==========================================
+# MINIMUM DETECTABLE EFFECT
+# ==========================================
+
+
+def test_inv_norm_cdf_known_quantiles():
+    assert _inv_norm_cdf(0.975) == pytest.approx(1.959964, abs=1e-4)
+    assert _inv_norm_cdf(0.80) == pytest.approx(0.841621, abs=1e-4)
+    assert _inv_norm_cdf(0.5) == pytest.approx(0.0, abs=1e-6)
+    assert _inv_norm_cdf(0.025) == pytest.approx(-1.959964, abs=1e-4)
+
+
+def test_mde_reproduces_the_run_numbers():
+    # the committed result: std of per-date IC ~0.136 over 39 dates
+    m = minimum_detectable_ic(0.136, 39, power=0.80, alpha=0.05)
+    assert m.se == pytest.approx(0.0218, abs=5e-4)
+    assert m.sig_threshold == pytest.approx(0.043, abs=2e-3)   # |IC| significant if observed
+    assert m.mde == pytest.approx(0.061, abs=2e-3)             # 80%-power detectable IC
+
+
+def test_mde_shrinks_with_more_dates():
+    few = minimum_detectable_ic(0.136, 39)
+    many = minimum_detectable_ic(0.136, 39 * 4)
+    assert many.mde < few.mde
+    assert many.mde == pytest.approx(few.mde / 2, rel=1e-6)   # MDE ~ 1/sqrt(n)
+
+
+def test_mde_none_when_insufficient():
+    assert minimum_detectable_ic(0.136, 1) is None
+    assert minimum_detectable_ic(0.0, 39) is None
